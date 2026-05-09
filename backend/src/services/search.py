@@ -1,12 +1,10 @@
-"""利用 HelloAgents SearchTool 的搜索分发助手。"""
+"""混合搜索调度器，直接使用 Tavily 和 SerpApi。"""
 
 from __future__ import annotations
 
 import logging
 import threading
 from typing import Any
-
-from hello_agents.tools import SearchTool
 
 from config import Configuration
 from utils import (
@@ -18,23 +16,92 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
-_GLOBAL_SEARCH_TOOL: SearchTool | None = None
-_SEARCH_TOOL_LOCK = threading.Lock()
+
+_tavily_client = None
+_serpapi_key: str | None = None
+_search_lock = threading.Lock()
 
 
-def get_global_search_tool(config: Configuration) -> SearchTool:
-    """使用 API 密钥延迟初始化全局搜索工具（线程安全）。"""
-    global _GLOBAL_SEARCH_TOOL
-    if _GLOBAL_SEARCH_TOOL is None:
-        with _SEARCH_TOOL_LOCK:
-            # 双重检查锁定，避免多线程重复创建
-            if _GLOBAL_SEARCH_TOOL is None:
-                _GLOBAL_SEARCH_TOOL = SearchTool(
-                    backend="hybrid",
-                    tavily_key=config.tavily_api_key,
-                    serpapi_key=config.serpapi_api_key,
-                )
-    return _GLOBAL_SEARCH_TOOL
+def _get_tavily_client(config: Configuration):
+    """延迟初始化 Tavily 客户端（线程安全）。"""
+    global _tavily_client
+    if _tavily_client is None and config.tavily_api_key:
+        with _search_lock:
+            if _tavily_client is None:
+                try:
+                    from tavily import TavilyClient
+                    _tavily_client = TavilyClient(api_key=config.tavily_api_key)
+                except ImportError:
+                    logger.warning("tavily-python 未安装，Tavily 搜索不可用")
+    return _tavily_client
+
+
+def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> list[dict[str, Any]]:
+    """使用 Tavily 执行搜索。"""
+    client = _get_tavily_client(config)
+    if client is None:
+        return []
+    try:
+        response = client.search(
+            query=query,
+            max_results=max_results,
+            include_raw_content=False,
+        )
+        results = []
+        for item in response.get("results", []):
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "content": item.get("content", ""),
+            })
+        return results
+    except Exception as exc:
+        logger.warning("Tavily 搜索失败: %s", exc)
+        return []
+
+
+def _serpapi_search(query: str, config: Configuration, max_results: int = 5) -> list[dict[str, Any]]:
+    """使用 SerpApi 执行搜索。"""
+    if not config.serpapi_api_key:
+        return []
+    try:
+        from serpapi import GoogleSearch
+        search = GoogleSearch({
+            "q": query,
+            "api_key": config.serpapi_api_key,
+            "num": max_results,
+        })
+        response = search.get_dict()
+        results = []
+        for item in response.get("organic_results", []):
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("link", ""),
+                "content": item.get("snippet", ""),
+            })
+        return results
+    except ImportError:
+        logger.warning("google-search-results 未安装，SerpApi 搜索不可用")
+        return []
+    except Exception as exc:
+        logger.warning("SerpApi 搜索失败: %s", exc)
+        return []
+
+
+def _hybrid_search(query: str, config: Configuration, max_results: int = 5) -> list[dict[str, Any]]:
+    """混合搜索：同时调用 Tavily 和 SerpApi，合并去重。"""
+    tavily_results = _tavily_search(query, config, max_results)
+    serpapi_results = _serpapi_search(query, config, max_results)
+
+    seen_urls: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for item in tavily_results + serpapi_results:
+        url = item.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            merged.append(item)
+
+    return merged[:max_results]
 
 
 def dispatch_search(
@@ -44,64 +111,44 @@ def dispatch_search(
 ) -> tuple[dict[str, Any] | None, list[str], str | None, str]:
     """
     执行配置的搜索后端并标准化响应负载。
-    
-    Args:
-        query: 搜索查询字符串。
-        config: 包含搜索 API 配置的对象。
-        loop_count: 当前研究循环计数（用于分页或深度控制）。
-        
+
     Returns:
         元组 (原始负载, 通知列表, 答案文本, 后端标签)。
     """
     search_api = get_config_value(config.search_api)
-    search_tool = get_global_search_tool(config)
+    notices: list[str] = []
 
     try:
-        raw_response = search_tool.run(
-            {
-                "input": query,
-                "backend": search_api,
-                "mode": "structured",
-                "fetch_full_page": config.fetch_full_page,
-                "max_results": 5,
-                "max_tokens_per_source": MAX_TOKENS_PER_SOURCE,
-                "loop_count": loop_count,
-            }
-        )
-    except Exception as exc:  # pragma: no cover - defensive logging
+        if search_api == "tavily":
+            results = _tavily_search(query, config)
+            backend_label = "tavily"
+        elif search_api == "serpapi":
+            results = _serpapi_search(query, config)
+            backend_label = "serpapi"
+        else:  # hybrid
+            results = _hybrid_search(query, config)
+            backend_label = "hybrid"
+    except Exception as exc:
         logger.exception("Search backend %s failed: %s", search_api, exc)
         raise
 
-    if isinstance(raw_response, str):
-        notices = [raw_response]
-        logger.warning("Search backend %s returned text notice: %s", search_api, raw_response)
-        payload: dict[str, Any] = {
-            "results": [],
-            "backend": search_api,
-            "answer": None,
-            "notices": notices,
-        }
-    else:
-        payload = raw_response
-        notices = list(payload.get("notices") or [])
+    if not results:
+        notices.append(f"搜索后端 {backend_label} 未返回结果")
 
-    backend_label = str(payload.get("backend") or search_api)
-    answer_text = payload.get("answer")
-    results = payload.get("results", [])
-
-    if notices:
-        for notice in notices:
-            logger.info("Search notice (%s): %s", backend_label, notice)
+    payload: dict[str, Any] = {
+        "results": results,
+        "backend": backend_label,
+        "answer": None,
+        "notices": notices,
+    }
 
     logger.info(
-        "Search backend=%s resolved_backend=%s answer=%s results=%s",
-        search_api,
+        "Search backend=%s results=%s",
         backend_label,
-        bool(answer_text),
         len(results),
     )
 
-    return payload, notices, answer_text, backend_label
+    return payload, notices, None, backend_label
 
 
 def prepare_research_context(
@@ -111,12 +158,7 @@ def prepare_research_context(
 ) -> tuple[str, str]:
     """
     为下游代理构建结构化上下文和来源摘要。
-    
-    Args:
-        search_result: 搜索后端返回的原始结果字典。
-        answer_text: 搜索后端直接生成的答案（如果有）。
-        config: 配置对象。
-        
+
     Returns:
         元组 (来源摘要列表, 详细上下文文本)。
     """

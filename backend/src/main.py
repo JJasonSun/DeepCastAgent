@@ -9,10 +9,19 @@ import json
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 # Ensure src directory is in sys.path for module imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Load .env file from backend root
+from dotenv import load_dotenv
+
+_backend_root = Path(__file__).resolve().parent.parent
+_env_path = _backend_root / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware

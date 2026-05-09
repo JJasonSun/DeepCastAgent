@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
+from typing import Callable
 
-from hello_agents import ToolAwareSimpleAgent
+from openai import OpenAI
 
 from config import Configuration
 from models import SummaryState, TodoItem
+from prompts import task_summarizer_system_prompt
+from services.llm import call_llm, stream_llm
 from services.notes import build_note_guidance
 from services.text_processing import strip_tool_calls
 from utils import strip_thinking_tokens
@@ -16,23 +19,24 @@ from utils import strip_thinking_tokens
 class SummarizationService:
     """处理同步和流式任务总结。"""
 
-    def __init__(  # noqa: D107
+    def __init__(
         self,
-        summarizer_factory: Callable[[], ToolAwareSimpleAgent],
+        client: OpenAI,
         config: Configuration,
     ) -> None:
-        self._agent_factory = summarizer_factory
+        self._client = client
         self._config = config
 
     def summarize_task(self, state: SummaryState, task: TodoItem, context: str) -> str:
-        """使用总结代理生成特定于任务的总结。"""
+        """使用 LLM 生成特定于任务的总结。"""
         prompt = self._build_prompt(state, task, context)
 
-        agent = self._agent_factory()
-        try:
-            response = agent.run(prompt)
-        finally:
-            agent.clear_history()
+        response = call_llm(
+            client=self._client,
+            system_prompt=task_summarizer_system_prompt.strip(),
+            user_prompt=prompt,
+            model=self._config.fast_llm_model,
+        )
 
         summary_text = response.strip()
         if self._config.strip_thinking_tokens:
@@ -51,10 +55,9 @@ class SummarizationService:
         raw_buffer = ""
         visible_output = ""
         emit_index = 0
-        agent = self._agent_factory()
 
         def flush_visible() -> Iterator[str]:
-            """处理缓冲区，提取并 yield 所有不在 <think>...</think> 块中的可见文本。如果遇到不完整的 <think> 标签，会暂停输出等待更多数据。"""
+            """处理缓冲区，提取并 yield 所有不在 <think>...</think> 块中的可见文本。"""
             nonlocal emit_index, raw_buffer
             while True:
                 start = raw_buffer.find("<think>", emit_index)
@@ -79,25 +82,28 @@ class SummarizationService:
 
         def generator() -> Iterator[str]:
             nonlocal raw_buffer, visible_output, emit_index
-            try:
-                for chunk in agent.stream_run(prompt):
-                    raw_buffer += chunk
-                    if remove_thinking:
-                        for segment in flush_visible():
-                            visible_output += segment
-                            if segment:
-                                yield segment
-                    else:
-                        visible_output += chunk
-                        if chunk:
-                            yield chunk
-            finally:
+            for chunk in stream_llm(
+                client=self._client,
+                system_prompt=task_summarizer_system_prompt.strip(),
+                user_prompt=prompt,
+                model=self._config.fast_llm_model,
+            ):
+                raw_buffer += chunk
                 if remove_thinking:
                     for segment in flush_visible():
                         visible_output += segment
                         if segment:
                             yield segment
-                agent.clear_history()
+                else:
+                    visible_output += chunk
+                    if chunk:
+                        yield chunk
+
+            if remove_thinking:
+                for segment in flush_visible():
+                    visible_output += segment
+                    if segment:
+                        yield segment
 
         def get_summary() -> str:
             if remove_thinking:

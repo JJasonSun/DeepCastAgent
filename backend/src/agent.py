@@ -3,25 +3,19 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from typing import Any
 
-from hello_agents import HelloAgentsLLM, ToolAwareSimpleAgent
-from hello_agents.tools import ToolRegistry
-from hello_agents.tools.builtin.note_tool import NoteTool
+from openai import OpenAI
 
 from config import Configuration
 from models import SummaryState, SummaryStateOutput, TodoItem
-from prompts import (
-    report_writer_instructions,
-    task_summarizer_system_prompt,
-    todo_planner_system_prompt,
-)
 from services.audio_generator import AudioGenerationService
 from services.audio_synthesizer import PodcastSynthesisService
+from services.note_manager import NoteManager
 from services.planner import PlanningService
 from services.reporter import ReportingService
 from services.script_generator import ScriptGenerationService
@@ -33,25 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 class DeepResearchAgent:
-    """使用 HelloAgents 协调基于 TODO 的研究工作流的协调器。"""
+    """基于 OpenAI SDK 协调 TODO 驱动的研究工作流。"""
 
     def __init__(self, config: Configuration | None = None) -> None:
         """使用配置和共享工具初始化协调器。"""
         self.config = config or Configuration.from_env()
-        self.default_llm = self._init_llm(self.config.llm_model_id)
-        self.smart_llm = self._init_llm(self.config.smart_llm_model)
-        self.fast_llm = self._init_llm(self.config.fast_llm_model)
 
+        # OpenAI 客户端（smart / fast / default）
+        self.default_client = self._init_client(self.config.llm_model_id)
+        self.smart_client = self._init_client(self.config.smart_llm_model)
+        self.fast_client = self._init_client(self.config.fast_llm_model)
+
+        # 笔记管理器
         self.note_tool = (
-            NoteTool(workspace=self.config.notes_workspace)
+            NoteManager(workspace=self.config.notes_workspace)
             if self.config.enable_notes
             else None
         )
-        self.tools_registry: ToolRegistry | None = None
-        if self.note_tool:
-            registry = ToolRegistry()
-            registry.register_tool(self.note_tool)
-            self.tools_registry = registry
 
         self._tool_tracker = ToolCallTracker(
             self.config.notes_workspace if self.config.enable_notes else None
@@ -60,29 +52,12 @@ class DeepResearchAgent:
         self._state_lock = Lock()
         self._cancel_event = Event()  # 取消信号
 
-        self.todo_agent = self._create_tool_aware_agent(
-            name="研究规划专家",
-            system_prompt=todo_planner_system_prompt.strip(),
-            llm=self.smart_llm,
-        )
-        self.report_agent = self._create_tool_aware_agent(
-            name="报告撰写专家",
-            system_prompt=report_writer_instructions.strip(),
-            llm=self.smart_llm,
-        )
-
-        self._summarizer_factory: Callable[[], ToolAwareSimpleAgent] = lambda: self._create_tool_aware_agent(  # noqa: E501
-            name="任务总结专家",
-            system_prompt=task_summarizer_system_prompt.strip(),
-            llm=self.fast_llm,
-        )
-
-        self.planner = PlanningService(self.todo_agent, self.config)
-        self.summarizer = SummarizationService(self._summarizer_factory, self.config)
-        self.reporting = ReportingService(self.report_agent, self.config)
+        # 服务层（直接注入 OpenAI 客户端）
+        self.planner = PlanningService(self.smart_client, self.config)
+        self.summarizer = SummarizationService(self.fast_client, self.config)
+        self.reporting = ReportingService(self.smart_client, self.config)
         self.script_generator = ScriptGenerationService(self.config)
         self.audio_generator = AudioGenerationService(self.config)
-
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
 
     def cancel(self) -> None:
@@ -97,37 +72,14 @@ class DeepResearchAgent:
     # ------------------------------------------------------------------
     # 公共 API
     # ------------------------------------------------------------------
-    def _init_llm(self, model_id_override: str | None = None) -> HelloAgentsLLM:
-        """根据配置偏好实例化 HelloAgentsLLM。"""
-        llm_kwargs: dict[str, Any] = {"temperature": 0.0}
-
-        model_id = model_id_override or self.config.llm_model_id
-        if model_id:
-            llm_kwargs["model"] = model_id
-
-        provider = (self.config.llm_provider or "").strip()
-        if provider:
-            llm_kwargs["provider"] = provider
-
-        if self.config.llm_base_url:
-            llm_kwargs["base_url"] = self.config.llm_base_url
-        if self.config.llm_api_key:
-            llm_kwargs["api_key"] = self.config.llm_api_key
-
-        return HelloAgentsLLM(**llm_kwargs)
-
-    def _create_tool_aware_agent(self, *, name: str, system_prompt: str, llm: HelloAgentsLLM) -> ToolAwareSimpleAgent:
-        """实例化共享工具注册表和跟踪器的 ToolAwareSimpleAgent。"""
-        return ToolAwareSimpleAgent(
-            name=name,
-            llm=llm,
-            system_prompt=system_prompt,
-            enable_tool_calling=self.tools_registry is not None,
-            tool_registry=self.tools_registry,
-            tool_call_listener=self._tool_tracker.record,
+    def _init_client(self, model_id_override: str | None = None) -> OpenAI:
+        """根据配置创建 OpenAI 客户端。"""
+        return OpenAI(
+            api_key=self.config.llm_api_key,
+            base_url=self.config.llm_base_url,
         )
 
-    def _set_tool_event_sink(self, sink: Callable[[dict[str, Any]], None] | None) -> None:
+    def _set_tool_event_sink(self, sink: Any) -> None:
         """启用或禁用立即工具事件回调。"""
         self._tool_event_sink_enabled = sink is not None
         self._tool_tracker.set_event_sink(sink)
@@ -135,7 +87,7 @@ class DeepResearchAgent:
     def run(self, topic: str) -> SummaryStateOutput:
         """
         执行研究工作流并返回最终报告（同步模式）。
-        
+
         此方法按顺序执行以下步骤：
         1. 初始化状态和规划任务。
         2. 串行执行每个任务（搜索 + 总结）。
@@ -171,7 +123,7 @@ class DeepResearchAgent:
 
         # 合成播客
         self.podcast_synthesizer.synthesize_podcast(audio_files, task_id)
-        
+
         return SummaryStateOutput(
             running_summary=report,
             report_markdown=report,
@@ -184,13 +136,6 @@ class DeepResearchAgent:
         执行研究工作流并产生增量进度事件（流式模式）。
 
         此方法使用多线程并行执行研究任务，并通过生成器实时返回进度。
-        主要步骤：
-        1. 初始化并规划任务。
-        2. 为每个任务启动一个工作线程进行并行处理。
-        3. 实时流式传输任务状态、搜索结果和部分总结。
-        4. 所有任务完成后，生成并流式传输最终报告。
-        5. 生成并流式传输播客脚本和音频合成进度。
-
         支持通过 cancel() 方法取消执行。
         """
         # 重置取消状态
@@ -372,7 +317,7 @@ class DeepResearchAgent:
             "stage": "report",
             "message": "所有研究任务已完成，正在撰写深度研究报告...",
         }
-        yield {"type": "log", "message": f"🧠 正在调用 {self.config.smart_llm_model} 模型撰写深度报告..."}
+        yield {"type": "log", "message": f"正在调用 {self.config.smart_llm_model} 模型撰写深度报告..."}
 
         if self.is_cancelled():
             return
@@ -384,7 +329,7 @@ class DeepResearchAgent:
             yield event
         state.structured_report = report
         state.running_summary = report
-        yield {"type": "log", "message": f"✓ 报告撰写完成，共 {len(report)} 字符"}
+        yield {"type": "log", "message": f"报告撰写完成，共 {len(report)} 字符"}
 
         if self.is_cancelled():
             return
@@ -405,14 +350,13 @@ class DeepResearchAgent:
         Phase 3: 将报告转化为播客脚本。
 
         Yields 流式事件，最终 return 脚本轮次数 (int)。
-        调用方通过 ``script_turns = yield from self._stream_script_phase(state)`` 获取。
         """
         yield {
             "type": "stage_change",
             "stage": "script",
             "message": "正在将研究报告转化为双人对谈播客脚本...",
         }
-        yield {"type": "log", "message": f"🧠 正在调用 {self.config.fast_llm_model} 模型生成播客脚本..."}
+        yield {"type": "log", "message": f"正在调用 {self.config.fast_llm_model} 模型生成播客脚本..."}
         yield {"type": "log", "message": "脚本策划专家正在创作 Host (苏打) 与 Guest (冰糖) 的对话..."}
 
         if self.is_cancelled():
@@ -425,7 +369,7 @@ class DeepResearchAgent:
         state.podcast_script = script
 
         script_turns = len(script) if script else 0
-        yield {"type": "log", "message": f"✓ 脚本生成完成，共 {script_turns} 轮对话"}
+        yield {"type": "log", "message": f"脚本生成完成，共 {script_turns} 轮对话"}
         yield {
             "type": "podcast_script",
             "script": script,
@@ -433,7 +377,7 @@ class DeepResearchAgent:
         }
 
         if script_turns == 0:
-            yield {"type": "log", "message": "⚠️ 警告：脚本为空，跳过音频生成"}
+            yield {"type": "log", "message": "警告：脚本为空，跳过音频生成"}
 
         return script_turns  # type: ignore[return-value]
 
@@ -465,7 +409,7 @@ class DeepResearchAgent:
                 "total": total,
                 "role": role,
                 "preview": preview,
-                "message": f"[TTS {current}/{total}] ✓ {role} 语音生成成功",
+                "message": f"[TTS {current}/{total}] {role} 语音生成成功",
             })
             return True
 
@@ -508,7 +452,7 @@ class DeepResearchAgent:
                 if event.get("type") == "audio_progress":
                     yield {
                         "type": "log",
-                        "message": f"[TTS {event['current']}/{event['total']}] ✓ {event['role']} 语音已完成",
+                        "message": f"[TTS {event['current']}/{event['total']}] {event['role']} 语音已完成",
                     }
             except Empty:
                 continue
@@ -523,7 +467,7 @@ class DeepResearchAgent:
         audio_count = len(audio_files) if audio_files else 0
 
         if audio_error:
-            yield {"type": "log", "message": f"⚠️ 音频生成出错: {audio_error[0]}"}
+            yield {"type": "log", "message": f"音频生成出错: {audio_error[0]}"}
 
         yield {"type": "log", "message": f"语音生成完成，成功 {audio_count}/{script_turns} 段"}
         yield {
@@ -549,9 +493,9 @@ class DeepResearchAgent:
         )
         if podcast_file:
             yield {"type": "podcast_ready", "file": podcast_file}
-            yield {"type": "log", "message": f"🎉 播客文件生成成功: {podcast_file}"}
+            yield {"type": "log", "message": f"播客文件生成成功: {podcast_file}"}
         else:
-            yield {"type": "log", "message": "⚠️ 播客合成失败，请检查 FFmpeg 配置"}
+            yield {"type": "log", "message": "播客合成失败，请检查 FFmpeg 配置"}
 
     # ------------------------------------------------------------------
     # 执行助手
@@ -566,15 +510,6 @@ class DeepResearchAgent:
     ) -> Iterator[dict[str, Any]]:
         """
         对单个任务运行搜索 + 总结逻辑。
-        
-        Args:
-            state: 全局研究状态。
-            task: 当前要执行的任务项。
-            emit_stream: 是否产生流式事件（True 用于 run_stream，False 用于 run）。
-            step: 当前步骤编号（仅用于流式事件）。
-            
-        Returns:
-            事件字典的迭代器（即使 emit_stream=False，也可能产生少量内部事件，通常被忽略）。
         """
         task.status = "in_progress"
 
@@ -743,7 +678,7 @@ class DeepResearchAgent:
                     "content": content,
                 }
             )
-            if response.startswith("❌"):
+            if response.startswith("笔记不存在"):
                 note_id = None
 
         if not note_id:
@@ -780,18 +715,7 @@ class DeepResearchAgent:
         return payload
 
     def _find_existing_report_note_id(self, state: SummaryState) -> str | None:
-        """
-        查找与研究主题相关的现有报告笔记 ID。
-        
-        此方法检查当前状态是否已关联报告笔记 ID。如果没有，它会遍历已记录的工具事件，
-        查找最近创建或更新的结论类型笔记，标题中包含研究主题的报告。
-        
-        Args:
-            state: 当前研究状态，包含研究主题和已记录的工具事件。
-            
-        Returns:
-            与研究主题相关的现有报告笔记 ID（如果存在），否则为 None。
-        """
+        """查找与研究主题相关的现有报告笔记 ID。"""
         if state.report_note_id:
             return state.report_note_id
 
@@ -821,5 +745,3 @@ class DeepResearchAgent:
                 return note_id
 
         return None
-
-

@@ -1,4 +1,4 @@
-"""DeepCast - 由 HelloAgents 驱动的自动播客生成代理。"""
+"""DeepCast - 基于 OpenAI SDK 的自动播客生成代理。"""
 
     __version__ = "0.0.1"
 

@@ -127,7 +127,7 @@ class Configuration(BaseModel):
         description="SerpApi 的 API 密钥",
     )
     cors_origins: str = Field(
-        default="http://localhost:5173,http://localhost:5174,http://localhost:3000",
+        default="http://localhost:5173,http://localhost:5174,http://localhost:5175,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,http://localhost:3000",
         title="CORS 允许的源",
         description="逗号分隔的允许跨域请求的源列表",
     )

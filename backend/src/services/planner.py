@@ -7,11 +7,12 @@ import logging
 import re
 from typing import Any
 
-from hello_agents import ToolAwareSimpleAgent
+from openai import OpenAI
 
 from config import Configuration
 from models import SummaryState, TodoItem
-from prompts import get_current_date, todo_planner_instructions
+from prompts import get_current_date, todo_planner_instructions, todo_planner_system_prompt
+from services.llm import call_llm
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
@@ -21,20 +22,21 @@ TOOL_CALL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-class PlanningService:
-    """包装规划器代理以生成结构化 TODO 项目。"""
 
-    def __init__(self, planner_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
-        self._agent = planner_agent
+class PlanningService:
+    """使用 OpenAI SDK 生成结构化 TODO 项目。"""
+
+    def __init__(self, client: OpenAI, config: Configuration) -> None:
+        self._client = client
         self._config = config
 
     def plan_todo_list(self, state: SummaryState) -> list[TodoItem]:
         """
-        要求规划器代理将主题分解为可操作的任务。
-        
+        要求规划器将主题分解为可操作的任务。
+
         Args:
             state: 当前研究状态，包含主题。
-            
+
         Returns:
             规划出的 TodoItem 列表。
         """
@@ -43,8 +45,12 @@ class PlanningService:
             research_topic=state.research_topic,
         )
 
-        response = self._agent.run(prompt)
-        self._agent.clear_history()
+        response = call_llm(
+            client=self._client,
+            system_prompt=todo_planner_system_prompt.strip(),
+            user_prompt=prompt,
+            model=self._config.smart_llm_model,
+        )
 
         logger.info("Planner raw output (truncated): %s", response[:500])
 
@@ -75,11 +81,7 @@ class PlanningService:
 
     @staticmethod
     def create_fallback_task(state: SummaryState) -> TodoItem:
-        """
-        规划失败时创建一个最小的回退任务。
-        
-        当 LLM 无法生成有效的 JSON 任务列表时调用。
-        """
+        """规划失败时创建一个最小的回退任务。"""
         return TodoItem(
             id=1,
             title="基础背景梳理",
@@ -91,11 +93,7 @@ class PlanningService:
     # 解析助手
     # ------------------------------------------------------------------
     def _extract_tasks(self, raw_response: str) -> list[dict[str, Any]]:
-        """
-        将规划器输出解析为任务字典列表。
-        
-        支持纯 JSON 格式或嵌入在工具调用中的 JSON。
-        """
+        """将规划器输出解析为任务字典列表。"""
         text = raw_response.strip()
         if self._config.strip_thinking_tokens:
             text = strip_thinking_tokens(text)

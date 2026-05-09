@@ -124,7 +124,7 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 ```
 
 **技术栈：**
-- **智能体框架：** [HelloAgents](https://github.com/datawhalechina/Hello-Agents)
+- **智能体编排：** 自研多智能体工作流（基于 OpenAI SDK）
 - **大语言模型：** `ecnu-reasoner`（深度推理）、`ecnu-max`（快速响应）
 - **语音合成：** MiMo-V2.5-TTS（预置音色 + 风格控制）
 - **后端：** Python 3.10+, FastAPI, Loguru

@@ -66,7 +66,7 @@
       </div>
 
       <!-- Footer hint -->
-      <p class="text-center text-xs text-gray-600 mt-5">基于 HelloAgents 框架 · 自动化深度研究 → 播客生成</p>
+      <p class="text-center text-xs text-gray-600 mt-5">自动化深度研究 → 播客生成</p>
     </div>
   </div>
 </template>

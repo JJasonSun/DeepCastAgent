@@ -37,8 +37,7 @@ def configure_logging():
         "services.script_generator",
         "httpx",
         "httpcore",
-        "urllib3",
-        "hello_agents"
+        "urllib3"
     ]
     for logger_name in loggers_to_silence:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
