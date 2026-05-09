@@ -106,6 +106,11 @@ class Configuration(BaseModel):
         title="TTS 模型",
         description="TTS 服务的模型标识符",
     )
+    tts_voice_design_model: str = Field(
+        default="mimo-v2.5-tts-voicedesign",
+        title="TTS 音色设计模型",
+        description="通过文本描述自定义音色的 TTS 模型 ID",
+    )
     audio_output_dir: str = Field(
         default=str(BACKEND_ROOT / "output" / "audio"),
         title="音频输出目录",

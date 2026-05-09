@@ -83,7 +83,6 @@ dist-ssr/
 !.env.test
 
 # Project Specific (Preserved from original)
-docs/
 output/
 .github/
 .claude/

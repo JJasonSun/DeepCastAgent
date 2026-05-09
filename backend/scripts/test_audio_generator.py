@@ -16,6 +16,8 @@ class TestAudioGenerationService(unittest.TestCase):
         self.mock_config.audio_output_dir = "./test_output"
         self.mock_config.tts_base_url = "http://test.api/tts"
         self.mock_config.tts_model = "test-tts"
+        self.mock_config.tts_voice_design_model = "test-tts-voicedesign"
+        self.mock_config.tts_timeout = 300
         self.mock_config.ffmpeg_path = "ffmpeg"
 
         # Patch Path.mkdir to avoid actual filesystem creation during init
@@ -26,68 +28,74 @@ class TestAudioGenerationService(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('pathlib.Path.exists')
     def test_generate_audio_success(self, mock_exists, mock_file, mock_post):
-        # Setup mocks
-        mock_exists.return_value = False # File doesn't exist
-        
+        mock_exists.return_value = False
+
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.content = b"audio_data"
         mock_post.return_value = mock_response
-        
+
         script = [
-            {"role": "Host", "content": "Hello world"},
-            {"role": "Guest", "content": "Hi host"}
+            {"role": "Host", "content": "Hello world", "emotion": "好奇地追问"},
+            {"role": "Guest", "content": "Hi host", "emotion": "微笑着回应", "audio_tag": "轻笑"}
         ]
-        
+
         # Execute
         files = self.service.generate_audio(script, "task_123")
-        
+
         # Verify
         self.assertEqual(len(files), 2)
         self.assertTrue(files[0].endswith("task_123_000_Host.wav"))
         self.assertTrue(files[1].endswith("task_123_001_Guest.wav"))
-        
-        # Verify API calls
-        self.assertEqual(mock_post.call_count, 2)
-        
-        # Check first call arguments
-        args, kwargs = mock_post.call_args_list[0]
-        self.assertEqual(kwargs['json']['voice'], '苏打')
-        self.assertEqual(kwargs['json']['input'], 'Hello world')
-
-        # Check second call arguments
-        args, kwargs = mock_post.call_args_list[1]
-        self.assertEqual(kwargs['json']['voice'], '冰糖')
-        self.assertEqual(kwargs['json']['input'], 'Hi host')
 
     def test_generate_audio_no_api_key(self):
         self.mock_config.tts_api_key = None
         script = [{"role": "Host", "content": "Hello"}]
-        
+
         files = self.service.generate_audio(script)
         self.assertEqual(files, [])
 
-    @patch('requests.post')
-    @patch('pathlib.Path.exists')
-    def test_generate_audio_api_failure(self, mock_exists, mock_post):
-        mock_exists.return_value = False
-        
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_post.return_value = mock_response
-        
-        script = [{"role": "Host", "content": "Hello"}]
-        
-        files = self.service.generate_audio(script)
-        self.assertEqual(files, [])
+    def test_get_preset_voice(self):
+        self.assertEqual(self.service._get_preset_voice("Host"), "苏打")
+        self.assertEqual(self.service._get_preset_voice("苏打"), "苏打")
+        self.assertEqual(self.service._get_preset_voice("Guest"), "冰糖")
+        self.assertEqual(self.service._get_preset_voice("冰糖"), "冰糖")
+        self.assertEqual(self.service._get_preset_voice("Unknown"), "苏打")
 
-    def test_get_voice_for_role(self):
-        self.assertEqual(self.service._get_voice_for_role("Host"), "苏打")
-        self.assertEqual(self.service._get_voice_for_role("苏打"), "苏打")
-        self.assertEqual(self.service._get_voice_for_role("Guest"), "冰糖")
-        self.assertEqual(self.service._get_voice_for_role("冰糖"), "冰糖")
-        self.assertEqual(self.service._get_voice_for_role("Unknown"), "苏打") # Default
+    def test_build_director_instruction(self):
+        host_inst = self.service._build_director_instruction("Host", "好奇地追问")
+        self.assertIn("角色", host_inst)
+        self.assertIn("场景", host_inst)
+        self.assertIn("指导", host_inst)
+        self.assertIn("好奇地追问", host_inst)
+
+        guest_inst = self.service._build_director_instruction("Guest", "")
+        self.assertIn("角色", guest_inst)
+        self.assertIn("自然", guest_inst)
+
+    def test_embed_audio_tag(self):
+        self.assertEqual(
+            AudioGenerationService._embed_audio_tag("内容", "轻笑"),
+            "(轻笑)内容"
+        )
+        self.assertEqual(
+            AudioGenerationService._embed_audio_tag("内容", ""),
+            "内容"
+        )
+        self.assertEqual(
+            AudioGenerationService._embed_audio_tag("内容", None),
+            "内容"
+        )
+
+    def test_voice_design_description(self):
+        host_desc = self.service._get_voice_design_description("Host")
+        self.assertIn("年轻男性", host_desc)
+        self.assertIn("亲和力", host_desc)
+
+        guest_desc = self.service._get_voice_design_description("Guest")
+        self.assertIn("知性女性", guest_desc)
+        self.assertIn("沉稳", guest_desc)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -28,6 +28,14 @@ SCRIPT_JSON_SCHEMA = {
             "content": {
                 "type": "string",
                 "description": "对话内容"
+            },
+            "emotion": {
+                "type": "string",
+                "description": "说话时的情绪状态和说话方式，如：好奇地追问、兴奋地分享、若有所思地回应、忍不住轻笑"
+            },
+            "audio_tag": {
+                "type": "string",
+                "description": "可选的音频风格标签，控制细粒度语音表现，如：轻笑、叹气、语速加快、提高音量、放慢语速"
             }
         },
         "required": ["role", "content"]
@@ -120,7 +128,13 @@ class ScriptGenerationService:
                         role = "Host"
                     elif role.lower() in ["guest", "冰糖"]:
                         role = "Guest"
-                    valid_script.append({"role": role, "content": content})
+                    entry = {"role": role, "content": content}
+                    # 保留可选的情感和音频标签字段
+                    if item.get("emotion"):
+                        entry["emotion"] = str(item["emotion"]).strip()
+                    if item.get("audio_tag"):
+                        entry["audio_tag"] = str(item["audio_tag"]).strip()
+                    valid_script.append(entry)
             
             logger.info("Generated script with %d dialogue turns.", len(valid_script))
             return valid_script
@@ -216,21 +230,30 @@ class ScriptGenerationService:
     def _parse_objects_individually(self, content: str) -> list | None:
         """
         尝试逐个解析 JSON 对象。
-        
-        当整体解析失败时，尝试提取每个 {role, content} 对象。
+
+        当整体解析失败时，尝试提取每个 {role, content, ...} 对象。
         """
         results = []
-        
-        # 匹配 {"role": "...", "content": "..."} 模式
-        # 使用非贪婪匹配
+
+        # 匹配完整的 JSON 对象（从 { 到 }），然后尝试 json.loads
+        obj_pattern = r'\{[^{}]*\}'
+        for match in re.finditer(obj_pattern, content, re.DOTALL):
+            try:
+                obj = json.loads(match.group(0))
+                if isinstance(obj, dict) and "role" in obj and "content" in obj:
+                    results.append(obj)
+            except json.JSONDecodeError:
+                pass
+
+        if results:
+            return results
+
+        # 回退：匹配最基本的 {"role": "...", "content": "..."} 模式
         pattern = r'\{\s*"role"\s*:\s*"(Host|Guest)"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}'
-        
         for match in re.finditer(pattern, content, re.DOTALL):
             role = match.group(1)
-            # 处理转义字符
             content_text = match.group(2)
             try:
-                # 使用 json.loads 来正确处理转义
                 content_text = json.loads(f'"{content_text}"')
             except Exception:
                 pass

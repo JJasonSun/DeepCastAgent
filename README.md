@@ -79,6 +79,17 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **决策：** 将任务拆解为 5 个专业 Agent 协同：规划 Agent（拆解子任务）→ 搜索 Agent（混合搜索 Tavily + SerpApi）→ 总结 Agent（逐任务摘要）→ 报告 Agent（整合结构化报告）→ 脚本 Agent（转化为对话）。并行执行提升效率。
 
+### 6. 导演模式拟人语音（情感化 TTS）
+
+**问题：** AI 播客的语音像机器人朗读——每句台词用同样的语调、同样的节奏，缺乏情感变化和对话感，听众很快流失。
+
+**决策：** 采用 MiMo-V2.5-TTS 的三项进阶能力：
+- **导演模式**：为每句台词构建「角色/场景/指导」三维度风格指令，而非简单的一句话描述。指导部分根据台词的情绪标注动态变化。
+- **文本音色设计**（VoiceDesign）：通过自然语言描述自定义音色（"一位好奇心旺盛的年轻男性，语速偏快，偶尔因兴奋而提高音量"），而非依赖预置音色。
+- **音频标签**：在文本中嵌入 `(轻笑)`、`(叹气)`、`(语速加快)` 等标签，实现词级语音控制。
+
+**效果：** 语音不再是"读稿"，而是"表演"——同一角色在不同语境下有不同的情绪表达，对话中能听到自然的停顿、语气转折和情感流动。
+
 ## 核心指标体系
 
 **北极星指标：** WAST（Weekly Average Session Time）—— 活跃用户周均收听时长，衡量"是否真正填补了碎片化时间"。
@@ -116,17 +127,17 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 ```
 用户输入主题
-  → PlanningService（smart LLM）→ TodoItem[] 任务列表
+  → PlanningService（smart LLM + XGrammar 结构化输出）→ TodoItem[] 任务列表
   → [并行] SearchTool（Tavily + SerpApi）→ SummarizationService（fast LLM）
   → ReportingService（smart LLM）→ 结构化 Markdown 报告
-  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本
-  → AudioGenerationService（MiMo TTS）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
+  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本（含情感标注）
+  → AudioGenerationService（MiMo TTS 导演模式 + VoiceDesign）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
 ```
 
 **技术栈：**
-- **智能体编排：** 自研多智能体工作流（基于 OpenAI SDK）
+- **智能体编排：** 自研多智能体工作流（基于 OpenAI SDK + XGrammar 结构化输出）
 - **大语言模型：** `ecnu-reasoner`（深度推理）、`ecnu-max`（快速响应）
-- **语音合成：** MiMo-V2.5-TTS（预置音色 + 风格控制）
+- **语音合成：** MiMo-V2.5-TTS（导演模式 + VoiceDesign 文本音色设计 + 音频标签）
 - **后端：** Python 3.10+, FastAPI, Loguru
 - **前端：** Vue 3, Vite, TypeScript, Tailwind CSS + DaisyUI
 - **搜索增强：** Tavily API + SerpApi 混合搜索
