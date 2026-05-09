@@ -116,9 +116,9 @@ class ScriptGenerationService:
                     role = item["role"]
                     content = item["content"]
                     # 标准化角色名
-                    if role.lower() in ["host", "xiayu"]:
+                    if role.lower() in ["host", "苏打"]:
                         role = "Host"
-                    elif role.lower() in ["guest", "liwa"]:
+                    elif role.lower() in ["guest", "冰糖"]:
                         role = "Guest"
                     valid_script.append({"role": role, "content": content})
             

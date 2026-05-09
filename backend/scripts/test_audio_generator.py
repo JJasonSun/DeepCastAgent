@@ -44,20 +44,20 @@ class TestAudioGenerationService(unittest.TestCase):
         
         # Verify
         self.assertEqual(len(files), 2)
-        self.assertTrue(files[0].endswith("task_123_000_Host.mp3"))
-        self.assertTrue(files[1].endswith("task_123_001_Guest.mp3"))
+        self.assertTrue(files[0].endswith("task_123_000_Host.wav"))
+        self.assertTrue(files[1].endswith("task_123_001_Guest.wav"))
         
         # Verify API calls
         self.assertEqual(mock_post.call_count, 2)
         
         # Check first call arguments
         args, kwargs = mock_post.call_args_list[0]
-        self.assertEqual(kwargs['json']['voice'], 'xiayu')
+        self.assertEqual(kwargs['json']['voice'], '苏打')
         self.assertEqual(kwargs['json']['input'], 'Hello world')
-        
+
         # Check second call arguments
         args, kwargs = mock_post.call_args_list[1]
-        self.assertEqual(kwargs['json']['voice'], 'liwa')
+        self.assertEqual(kwargs['json']['voice'], '冰糖')
         self.assertEqual(kwargs['json']['input'], 'Hi host')
 
     def test_generate_audio_no_api_key(self):
@@ -83,11 +83,11 @@ class TestAudioGenerationService(unittest.TestCase):
         self.assertEqual(files, [])
 
     def test_get_voice_for_role(self):
-        self.assertEqual(self.service._get_voice_for_role("Host"), "xiayu")
-        self.assertEqual(self.service._get_voice_for_role("Xiayu"), "xiayu")
-        self.assertEqual(self.service._get_voice_for_role("Guest"), "liwa")
-        self.assertEqual(self.service._get_voice_for_role("Liwa"), "liwa")
-        self.assertEqual(self.service._get_voice_for_role("Unknown"), "xiayu") # Default
+        self.assertEqual(self.service._get_voice_for_role("Host"), "苏打")
+        self.assertEqual(self.service._get_voice_for_role("苏打"), "苏打")
+        self.assertEqual(self.service._get_voice_for_role("Guest"), "冰糖")
+        self.assertEqual(self.service._get_voice_for_role("冰糖"), "冰糖")
+        self.assertEqual(self.service._get_voice_for_role("Unknown"), "苏打") # Default
 
 if __name__ == '__main__':
     unittest.main()

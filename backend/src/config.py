@@ -97,12 +97,12 @@ class Configuration(BaseModel):
         description="TTS 服务的 API 密钥",
     )
     tts_base_url: str = Field(
-        default="https://chat.ecnu.edu.cn/open/api/v1/audio/speech",
+        default="https://api.xiaomimimo.com/v1",
         title="TTS 基础 URL",
         description="TTS API 的基础 URL",
     )
     tts_model: str = Field(
-        default="ecnu-tts",
+        default="mimo-v2.5-tts",
         title="TTS 模型",
         description="TTS 服务的模型标识符",
     )

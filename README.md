@@ -1,225 +1,208 @@
 # DeepCast
 
-> 你的私人 AI 播客制作人：从深度研究到音频节目的全自动化引擎
+> 输入一个主题，自动深度研究并生成一期双人对谈播客。
 
-## 📝 项目简介
+## 解决什么问题
 
-**DeepCast** 是一个基于 [HelloAgents](https://github.com/datawhalechina/Hello-Agents) 框架构建的自动化播客生成智能体。它能够针对用户提出的任何复杂主题，进行全网全维度的深度调研，生成结构化的研究报告，并进一步将其转化为生动的 **双人对谈式播客（Podcast）**。
+现代人面临一个矛盾：**想获取深度知识，但只有碎片化时间。**
 
-DeepCast 旨在解决现代人在海量碎片化信息中难以获取深度知识的问题。通过将枯燥的文字研究转化为易于听讲的音频形式，让用户能够在通勤、运动、家务等碎片化时间，随时随地开启一场深度的知识旅程。
+每天有海量行研报告、前沿论文、深度文章等待阅读，但通勤、健身、做家务的时间里，眼睛被占用，耳朵却是空闲的。
 
-## ✨ 核心功能
+DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成为第二个认知通道。** 用户只需输入一个主题（如"量子计算 2024 年有哪些突破"），系统自动完成全网深度调研、生成双人对谈脚本、合成语音，输出一期 5-10 分钟的播客，同时附带完整的研究报告。
 
-- [X] **深度全网调研**：自动拆解复杂课题，利用混合搜索（Tavily + SerpApi）进行多轮实时信息检索与总结。
-- [X] **自动化脚本策划**：智能体扮演 Host (Xiayu) 与 Guest (Liwa) 角色，将严谨的研究报告改写为幽默、自然且富有逻辑的对话脚本。
-- [X] **高品质语音合成**：集成 ECNU-TTS 模型，生成具备角色个性化特征的逼真语音。
-- [X] **一键流式合成**：自动处理音频拼接与合成，提供前端流式进度感知，从任务提交到音频下载实现全流程自动化。
+## 目标用户
 
-## 🛠️ 技术栈
+| 画像 | 痛点 | 使用场景 |
+|------|------|----------|
+| **金融投资人 / 行业分析师** | 每天面对海量行研报告，无法全部阅读 | 开车通勤时听"固态电池产业链现状"深度对谈 |
+| **科研工作者** | 需要跨界了解其他学科进展，但看论文门槛高且枯燥 | 做家务时听 AI 拆解"AlphaFold 3 的核心算法" |
+| **城市白领 / 终身学习者** | 知识焦虑强，买了专栏和电子书大多"吃灰"，缺乏整块阅读时间 | 地铁 30 分钟听一期"量子计算商业化"播客 |
 
-- **智能体框架**: [HelloAgents](https://github.com/datawhalechina/Hello-Agents)
-- **智能体范式**: Plan-and-Solve (TODO 规划) + 多代理协同模式
-- **大语言模型**: `ecnu-max`, `ecnu-reasoner` (用于深度逻辑推理)
-- **语音引擎**: `ecnu-tts`
-- **后端架构**: Python 3.10+, FastAPI, Loguru
-- **前端架构**: Vue 3, Vite, TypeScript, Tailwind CSS
-- **搜索增强**: Tavily API, SerpApi (Google Hybrid Search)
-- **音频处理**: Pydub, FFmpeg
+## 产品 Demo
 
-## 🧭 项目结构说明
+<!-- TODO: 替换为实际截图/GIF -->
+<!-- ![产品流程](docs/demo-flow.gif) -->
+
+**用户旅程：**
 
 ```
-.
-├─ backend/                        # 后端服务（FastAPI + 研究智能体）
-│  ├─ src/                         # 核心业务源码
-│  │  ├─ main.py                   #   FastAPI 入口 & SSE 流式接口
-│  │  ├─ agent.py                  #   DeepResearchAgent 核心编排器
-│  │  ├─ config.py                 #   配置中心（环境变量 / LLM / TTS）
-│  │  ├─ models.py                 #   Pydantic 数据模型（TodoItem, SummaryState 等）
-│  │  ├─ prompts.py                #   所有 Agent 的系统提示词模板
-│  │  ├─ utils.py                  #   通用工具函数
-│  │  └─ services/                 #   解耦的业务服务层
-│  │     ├─ planner.py             #     研究规划（课题拆解为 TodoItem）
-│  │     ├─ search.py              #     混合搜索（Tavily + SerpApi）
-│  │     ├─ summarizer.py          #     单任务搜索结果摘要
-│  │     ├─ reporter.py            #     综合研究报告生成
-│  │     ├─ script_generator.py    #     报告 → 双人对谈脚本
-│  │     ├─ audio_generator.py     #     TTS 逐句语音合成
-│  │     ├─ audio_synthesizer.py   #     FFmpeg 多段音频拼接
-│  │     ├─ notes.py               #     笔记持久化 & 索引管理
-│  │     ├─ text_processing.py     #     文本清洗与预处理
-│  │     └─ tool_events.py         #     工具调用事件处理
-│  ├─ scripts/                     # 开发 & 验证脚本
-│  │  ├─ verify_ecnu_llm.py        #   验证 LLM 连通性
-│  │  ├─ verify_ecnu_tts.py        #   验证 TTS 服务
-│  │  ├─ verify_ffmpeg.py          #   检查 FFmpeg 可用性
-│  │  ├─ verify_search.py          #   测试搜索 API
-│  │  ├─ test_agent_workflow.py    #   端到端工作流测试
-│  │  └─ test_audio_generator.py   #   音频生成单元测试
-│  ├─ output/                      # 运行时输出（.gitignore）
-│  │  ├─ notes/                    #   Markdown 笔记 + notes_index.json
-│  │  └─ audio/                    #   逐句 MP3 + 最终 podcast_*.mp3
-│  ├─ env.example                  # 环境变量模板
-│  ├─ pyproject.toml               # Python 项目元数据 & 依赖
-│  └─ requirements.txt             # pip 依赖清单
-├─ frontend/                       # 前端应用（Vue 3 + Vite + TypeScript）
-│  ├─ src/
-│  │  ├─ App.vue                   #   根组件（状态管理 & 事件路由）
-│  │  ├─ main.ts                   #   Vue 应用入口
-│  │  ├─ style.css                 #   全局样式（Tailwind CSS + DaisyUI）
-│  │  ├─ components/               #   页面组件
-│  │  │  ├─ SetupView.vue          #     主题输入 & 启动界面
-│  │  │  ├─ ProductionView.vue     #     制作流程（进度步骤 + 终端日志）
-│  │  │  ├─ PlayerView.vue         #     黑胶唱片播放器 & 报告阅读器
-│  │  │  └─ TerminalLog.vue        #     macOS 风格实时日志终端
-│  │  └─ services/
-│  │     └─ api.ts                 #   SSE 流式通信（fetch + ReadableStream）
-│  ├─ index.html                   # HTML 入口
-│  ├─ vite.config.ts               # Vite 构建 & 代理配置
-│  ├─ tsconfig.json                # TypeScript 配置
-│  └─ package.json                 # 前端依赖 & 脚本
-├─ .github/                        # GitHub 配置
-│  └─ copilot-instructions.md      #   Copilot 编码指引
-└─ README.md                       # 本文件
+输入主题 "AI Agent 的发展趋势"
+  → [15s] 规划 3 个研究子任务
+  → [45s] 并行搜索 + 摘要，实时展示 Agent 动作
+  → [60s] 生成结构化研究报告
+  → [75s] 转化为双人对谈脚本（Host 苏打 + Guest 冰糖）
+  → [120s] 逐句语音合成 + 拼接
+  → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告
 ```
 
-### 数据流转路径
+## 竞品对比
+
+| 维度 | DeepCast | Google NotebookLM | 喜马拉雅 / 得到 |
+|------|----------|-------------------|----------------|
+| **内容来源** | 用户输入任意主题，AI 自动全网深度检索 | 仅限用户手动上传的文档 | 平台 PGC/UGC，无法按需定制 |
+| **交互形式** | 中文双人对谈，角色人格鲜明 | 英文对谈优秀，中文支持弱 | 人类录制，质量高但产量低 |
+| **定制化** | 可控制话题、深度、音色风格 | 无法控制风格和时长 | 无，只能被动搜索已有内容 |
+| **使用门槛** | 零干预：输入主题即出播客 | 需手动上传文档 | 需搜索和筛选内容 |
+| **时效性** | 实时搜索，信息时效性强 | 仅基于上传文档 | 依赖人工更新频率 |
+
+## 产品设计亮点
+
+### 1. Terminal UI 缓解等待焦虑
+
+**问题：** AI 生成播客需要 2-3 分钟，用户不知道系统在做什么，容易流失。
+
+**决策：** 用 macOS 风格的 Terminal 实时展示 Agent 内部动作——"正在搜索 Tavily..."、"正在总结任务 2/3..."、"正在生成对话脚本..."。将"黑盒等待"变为"半透明过程"。
+
+**迭代细节：** 初版进度条从 0% 起步，用户反馈"以为卡住了"。改为从 2% 起步，消除静止错觉。这 2% 不是技术细节，是产品决策。
+
+### 2. 双输出形态：音频 + 报告
+
+**问题：** 同一内容在不同场景下有不同的最佳消费方式。
+
+**决策：** 每次生成同时提供两种输出——播客音频（通勤/运动时听）和 Markdown 研究报告（桌面端深读）。播放器旁并排展示报告，支持"图文对照阅读"。
+
+### 3. 黑胶唱片播放器（情感化设计）
+
+**问题：** "播放一个 AI 生成的音频文件"这个动作缺乏仪式感。
+
+**决策：** 设计旋转黑胶唱片 UI，配合"DeepCast Original"标识。播放时唱片旋转，暂停时停止。成本为零，但将"播放文件"变为"收听播客"的体验跃迁。
+
+### 4. 双主持人对话而非单人朗读
+
+**问题：** 单人 TTS 朗读研究报告枯燥且信息密度低。
+
+**决策：** 设计 Host（苏打，好奇幽默的主持人）+ Guest（冰糖，专业严谨的嘉宾）双角色，通过提问-解答的对话结构组织内容。双人对话天然具备"捧哏/逗哏"节奏，大脑更易吸收。
+
+### 5. Plan-and-Solve 多智能体工作流
+
+**问题：** 复杂主题无法一步到位生成高质量内容。
+
+**决策：** 将任务拆解为 5 个专业 Agent 协同：规划 Agent（拆解子任务）→ 搜索 Agent（混合搜索 Tavily + SerpApi）→ 总结 Agent（逐任务摘要）→ 报告 Agent（整合结构化报告）→ 脚本 Agent（转化为对话）。并行执行提升效率。
+
+## 核心指标体系
+
+**北极星指标：** WAST（Weekly Average Session Time）—— 活跃用户周均收听时长，衡量"是否真正填补了碎片化时间"。
+
+**转化漏斗：**
+
+```
+输入主题 (100%) → 等待超 30s (90%) → 点击播放 (80%) → 完播率 >80% (35%)
+```
+
+**关键体验指标：**
+- TTFA（Time to First Audio）：提交主题到首段音频可播放，目标 < 30s
+- 生成失败率：大模型超时 / TTS 失败 / 脚本解析错误的比例
+
+## 商业化模型
+
+| 层级 | 价格 | 权益 |
+|------|------|------|
+| **Free** | 免费 | 3 期/月，5 分钟短播客，浅层搜索，默认音色 |
+| **Pro** | $9.9/月 | 30 期/月，15-20 分钟，深度混合搜索，多种音色风格 |
+| **Max** | $39/月 | 文档上传（PDF/Word/URL），API 接口，企业级集成 |
+
+## 迭代路线图
+
+| 版本 | 重点 | 状态 |
+|------|------|------|
+| v1.0 | 主题 → 播客 MVP，跑通搜索到合成全流程 | 已完成 |
+| v1.5 | 支持 URL / PDF / 公众号文章作为输入源 | 规划中 |
+| v2.0 | 研究报告生成后增加"审批"环节，用户可修改大纲后再生成 | 规划中 |
+| v2.5 | 音色克隆 + 个性化主持人，打造专属"AI 知识伴游" | 规划中 |
+
+---
+
+## 技术架构
 
 ```
 用户输入主题
-  → PlanningService（smart_llm）→ TodoItem[] 任务列表
-  → [并行工作线程] SearchTool → SummarizationService（fast_llm）
-  → ReportingService（smart_llm）→ report.md
-  → ScriptGenerationService（fast_llm）→ 双人对话脚本
-  → AudioGenerationService → PodcastSynthesisService → podcast.mp3
+  → PlanningService（smart LLM）→ TodoItem[] 任务列表
+  → [并行] SearchTool（Tavily + SerpApi）→ SummarizationService（fast LLM）
+  → ReportingService（smart LLM）→ 结构化 Markdown 报告
+  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本
+  → AudioGenerationService（MiMo TTS）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
 ```
 
-## 🚀 快速开始
+**技术栈：**
+- **智能体框架：** [HelloAgents](https://github.com/datawhalechina/Hello-Agents)
+- **大语言模型：** `ecnu-reasoner`（深度推理）、`ecnu-max`（快速响应）
+- **语音合成：** MiMo-V2.5-TTS（预置音色 + 风格控制）
+- **后端：** Python 3.10+, FastAPI, Loguru
+- **前端：** Vue 3, Vite, TypeScript, Tailwind CSS + DaisyUI
+- **搜索增强：** Tavily API + SerpApi 混合搜索
+- **音频处理：** Pydub + FFmpeg
+
+## 快速开始
 
 ### 环境要求
 
 - Python 3.10+
 - Node.js 18+
-- **FFmpeg**: 必须安装并配置到系统环境变量，或在 `.env` 中指定绝对路径。
+- FFmpeg（必须安装，Windows 需在 `.env` 中配置 `FFMPEG_PATH`）
 
-### 1. 安装依赖
-
-**后端**:
+### 安装与运行
 
 ```bash
+# 后端
 cd backend
-# 推荐使用 uv 包管理器
-uv sync
-# 或使用 pip
-pip install -r requirements.txt
-```
+uv sync                          # 或 pip install -r requirements.txt
+cp env.example .env               # 填入 API Keys
+uv run src/main.py                # 启动服务 http://localhost:8000
 
-**前端**:
-
-```bash
+# 前端
 cd frontend
 npm install
+npm run dev                       # 访问 http://localhost:5174
 ```
 
-### 2. 配置环境变量
+**关键环境变量：**
+- `LLM_API_KEY` / `LLM_BASE_URL`：大语言模型 API
+- `TTS_API_KEY` / `TTS_BASE_URL`：语音合成 API
+- `TAVILY_API_KEY` / `SERPAPI_API_KEY`：搜索 API（至少配一项）
+- `FFMPEG_PATH`：FFmpeg 可执行文件路径
 
-在 `backend` 目录下创建 `.env` 文件（可参考 `env.example`）：
-
-```bash
-cp env.example .env
-```
-
-**关键配置项说明**：
-
-- `LLM_API_KEY`: ECNU 模型 API 密钥。
-- `TTS_API_KEY`: ECNU TTS 服务密钥。
-- `TAVILY_API_KEY` / `SERP_API_KEY`: 搜索服务密钥（至少配置一项）。
-- `FFMPEG_PATH`: 如果 FFmpeg 未加入环境变量，请填入其可执行文件的绝对路径。
-
-### 3. 运行项目
-
-**启动后端**:
+### 验证脚本
 
 ```bash
 cd backend
-uv run src/main.py
+python scripts/verify_ecnu_llm.py       # 验证 LLM 连通性
+python scripts/verify_mimo_tts.py       # 验证 TTS 服务
+python scripts/verify_ffmpeg.py         # 检查 FFmpeg
+python scripts/verify_search.py         # 测试搜索 API
 ```
 
-**启动前端**:
+## 项目结构
 
-```bash
-cd frontend
-npm run dev
+```
+backend/
+  src/
+    agent.py               # DeepResearchAgent 核心编排器
+    config.py              # 配置中心（环境变量加载）
+    models.py              # 数据模型（TodoItem, SummaryState）
+    prompts.py             # Agent 系统提示词模板
+    services/
+      planner.py           # 任务拆解
+      search.py            # 混合搜索调度
+      summarizer.py        # 逐任务摘要
+      reporter.py          # 报告生成
+      script_generator.py  # 对话脚本生成
+      audio_generator.py   # TTS 语音合成
+      audio_synthesizer.py # 音频拼接
+  scripts/                 # 验证 & 测试脚本
+frontend/
+  src/
+    components/
+      SetupView.vue        # 主题输入
+      ProductionView.vue   # 制作流程（进度 + Terminal 日志）
+      PlayerView.vue       # 黑胶播放器 + 报告阅读器
+    services/
+      api.ts               # SSE 流式通信
 ```
 
-访问 `http://localhost:5174` 即可开始使用。
-
-## 📖 使用示例
-
-### 通过 Web 界面
-
-在前端界面输入你想研究的主题，例如：
-
-> "量子计算在 2024 年有哪些重大突破？"
-
-DeepCast 将依次执行：
-
-1. **任务规划**：拆解知识点。
-2. **深度搜索**：在全球范围内寻找最新研究。
-3. **撰写报告**：生成一份详细的 Markdown 文档。
-4. **生成脚本**：将报告转化为 Xiayu 和 Liwa 的对话。
-5. **合成音频**：调用 TTS 生成并拼接成最终的 MP3 文件。
-
-### 通过 Python 代码
-
-```python
-from agent import DeepResearchAgent
-from config import Configuration
-
-config = Configuration.from_env()
-agent = DeepResearchAgent(config=config)
-
-# 流式模式 —— 逐步获取每个阶段的进度事件
-for event in agent.run_stream("人工智能 Agent 的五大核心性质"):
-    if event["type"] == "final_report":
-        print("📄 报告已生成：", event["report"][:100], "...")
-    elif event["type"] == "podcast_ready":
-        print("🎙️ 播客已就绪：", event["file"])
-    elif event["type"] == "log":
-        print(event["message"])
-```
-
-## 🎯 项目亮点
-
-- **从文字到声音的跨越**：不仅提供干货，更提供沉浸式的听觉体验。
-- **多代理协作闭环**：通过规划、研究、总结、改写、合成五个专业 Agent 透明协作。
-- **混合搜索策略**：结合 Tavily 的语义检索和 SerpApi 的海量数据，确保信息的时效性与准确性。
-- **强大的角色人格**：生成的脚本并非简单的朗读，而是具有好奇主持人与渊博专家的角色性格映射。
-
-## 📊 性能评估
-
-- **搜索准确度**：基于 ECNU-Reasoner 的深度分析，信息召回率较普通搜索提升 40% 以上。
-- **生成效率**：从万字调研到 5 分钟优质播客，全程自动化耗时约 2-3 分钟（视网络及并发而定）。
-
-## 🔮 未来计划
-
-- [ ] 支持更多音色和情感控制插件。
-- [ ] 丰富播客背景音乐（BGM）和氛围音效库。
-- [ ] 接入多模态能力，支持生成播客视频（播客短视频剪辑）。
-- [ ] 支持用户上传个人私有知识库进行定制化研究。
-
-## 🤝 贡献指南
-
-欢迎提出Issue和Pull Request！
-
-## 📄 许可证
+## 许可证
 
 MIT License
 
-## 👤 作者
+## 致谢
 
-- GitHub: [JJason-DeepCastAgent](https://github.com/JJasonSun/hello-agents)
-
-## 🙏 致谢
-
-感谢Datawhale社区和Hello-Agents项目！
+感谢 [Datawhale](https://github.com/datawhalechina) 社区和 [Hello-Agents](https://github.com/datawhalechina/Hello-Agents) 项目。

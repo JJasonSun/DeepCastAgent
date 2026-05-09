@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
 
-import requests
+from openai import OpenAI
 
 from config import Configuration
 
@@ -16,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 class AudioGenerationService:
     """处理与 TTS 服务的交互以生成音频文件。"""
+
+    # MiMo TTS 预置音色
+    _VOICE_HOST = "苏打"    # 男声主持人
+    _VOICE_GUEST = "冰糖"   # 女声嘉宾
+
+    # 风格控制指令（放在 MiMo TTS 的 user message 中）
+    _HOST_STYLE = "用温暖、活泼、略带幽默的语气说话，语速适中"
+    _GUEST_STYLE = "用专业、清晰、沉稳的语气说话，表达准确"
 
     def __init__(self, config: Configuration) -> None:
         """
@@ -85,16 +94,13 @@ class AudioGenerationService:
                 break
                 
             voice_id = self._get_voice_for_role(role)
-            if not voice_id:
-                logger.warning("Unknown role: %s. Using default voice.", role)
-                voice_id = "xiayu" # Fallback
             
-            file_name = f"{task_id}_{index:03d}_{role}.mp3"
+            file_name = f"{task_id}_{index:03d}_{role}.wav"
             file_path = self._output_dir / file_name
             
             logger.info("[TTS %d/%d] 正在为 %s 生成语音: %s...", index + 1, total, role, content[:20])
             
-            if self._call_tts_api(content, voice_id, file_path):
+            if self._call_tts_api(content, voice_id, role, file_path):
                 generated_files.append(str(file_path))
                 logger.info("[TTS %d/%d] ✓ %s 语音生成成功", index + 1, total, role)
                 
@@ -118,30 +124,48 @@ class AudioGenerationService:
 
     def _get_voice_for_role(self, role: str) -> str:
         """
-        将角色名称映射到语音 ID。
-        
+        将角色名称映射到 MiMo TTS 预置音色。
+
         Args:
             role: 角色名称（如 Host, Guest）。
-            
+
         Returns:
-            对应的语音 ID（xiayu 或 liwa）。
+            对应的 MiMo 音色名称。
         """
         role_lower = role.lower()
-        if "host" in role_lower or "xiayu" in role_lower:
-            return "xiayu"
-        elif "guest" in role_lower or "liwa" in role_lower:
-            return "liwa"
-        return "xiayu"
+        if "host" in role_lower or "苏打" in role:
+            return self._VOICE_HOST
+        elif "guest" in role_lower or "冰糖" in role:
+            return self._VOICE_GUEST
+        return self._VOICE_HOST
 
-    def _call_tts_api(self, text: str, voice: str, output_path: Path) -> bool:
+    def _build_style_instruction(self, role: str) -> str:
         """
-        调用 TTS API 并保存音频文件。
-        
+        根据角色构建 MiMo TTS 风格控制指令。
+
+        Args:
+            role: 角色名称（如 Host, Guest）。
+
+        Returns:
+            风格控制自然语言指令。
+        """
+        role_lower = role.lower()
+        if "host" in role_lower or "苏打" in role:
+            return self._HOST_STYLE
+        elif "guest" in role_lower or "冰糖" in role:
+            return self._GUEST_STYLE
+        return ""
+
+    def _call_tts_api(self, text: str, voice: str, role: str, output_path: Path) -> bool:
+        """
+        调用 MiMo TTS API 并保存音频文件。
+
         Args:
             text: 要转换的文本。
-            voice: 语音 ID。
-            output_path: 输出文件路径。
-            
+            voice: MiMo 预置音色名称（如 苏打、冰糖）。
+            role: 角色名称（如 Host, Guest），用于风格控制。
+            output_path: 输出文件路径（.wav）。
+
         Returns:
             如果成功生成并保存，返回 True；否则返回 False。
         """
@@ -149,41 +173,40 @@ class AudioGenerationService:
             logger.debug("Audio file already exists: %s", output_path)
             return True
 
-        headers = {
-            "Authorization": f"Bearer {self._config.tts_api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": self._config.tts_model,
-            "input": text,
-            "voice": voice,
-            "speed": 1.0
-        }
-        
         try:
-            logger.debug("Calling TTS API for voice %s: %s...", voice, text[:20])
-            # Use configurable timeout if available; default to 300 seconds for robustness.
-            timeout = self._config.tts_timeout
-            response = requests.post(
-                self._config.tts_base_url,
-                json=payload,
-                headers=headers,
-                timeout=timeout
+            client = OpenAI(
+                api_key=self._config.tts_api_key,
+                base_url=self._config.tts_base_url,
             )
-            
-            if response.status_code == 200:
-                with open(output_path, "wb") as f:
-                    f.write(response.content)
-                return True
-            else:
-                logger.error(
-                    "TTS API failed with status %d: %s", 
-                    response.status_code, 
-                    response.text
-                )
+
+            style_instruction = self._build_style_instruction(role)
+
+            messages = [
+                {"role": "assistant", "content": text},
+            ]
+            if style_instruction:
+                messages.insert(0, {"role": "user", "content": style_instruction})
+
+            logger.debug("Calling MiMo TTS for voice %s: %s...", voice, text[:20])
+
+            completion = client.chat.completions.create(
+                model=self._config.tts_model,
+                messages=messages,
+                audio={"format": "wav", "voice": voice},
+                timeout=self._config.tts_timeout,
+            )
+
+            audio_data = completion.choices[0].message.audio
+            if not audio_data or not audio_data.data:
+                logger.error("MiMo TTS returned empty audio data")
                 return False
-                
+
+            audio_bytes = base64.b64decode(audio_data.data)
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+
+            return True
+
         except Exception as e:
-            logger.exception("Exception during TTS API call: %s", e)
+            logger.exception("Exception during MiMo TTS API call: %s", e)
             return False
