@@ -106,12 +106,7 @@ class SummarizationService:
                         yield segment
 
         def get_summary() -> str:
-            if remove_thinking:
-                cleaned = strip_thinking_tokens(visible_output)
-            else:
-                cleaned = visible_output
-
-            return strip_tool_calls(cleaned).strip()
+            return strip_tool_calls(visible_output).strip()
 
         return generator(), get_summary
 

@@ -72,8 +72,6 @@
 </template>
 
 <script lang="ts" setup>
-import { ref } from "vue";
-
 const topic = defineModel<string>("topic", { required: true });
 
 defineEmits<{

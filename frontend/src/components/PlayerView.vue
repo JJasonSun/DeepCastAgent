@@ -127,7 +127,6 @@ defineEmits<{
 }>();
 
 const isPlaying = ref(false);
-const audioPlayer = ref<HTMLAudioElement | null>(null);
 
 const renderedReport = computed(() => md.render(props.reportMarkdown));
 </script>

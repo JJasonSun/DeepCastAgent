@@ -1,4 +1,4 @@
-"""轻量 LLM 调用封装，替代 HelloAgents 的 HelloAgentsLLM。"""
+"""轻量 LLM 调用封装。"""
 
 from __future__ import annotations
 

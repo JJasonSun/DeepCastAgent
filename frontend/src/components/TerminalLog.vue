@@ -52,7 +52,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, watch, nextTick } from "vue";
+import { ref, nextTick } from "vue";
 
 export interface LogEntry {
   time: string;
@@ -66,12 +66,6 @@ defineProps<{
 }>();
 
 const logContainer = ref<HTMLElement | null>(null);
-
-watch(
-  () => logContainer.value,
-  () => {},
-  { flush: "post" }
-);
 
 defineExpose({ scrollToBottom });
 

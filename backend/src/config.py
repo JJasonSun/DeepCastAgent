@@ -31,11 +31,6 @@ class Configuration(BaseModel):
         title="Research Depth",
         description="Number of research iterations",
     )
-    llm_provider: str = Field(
-        default="custom",
-        title="LLM 提供商",
-        description="提供商标识符 (custom)",
-    )
     search_api: SearchAPI = Field(
         default=SearchAPI.HYBRID,
         title="搜索 API",
@@ -60,11 +55,6 @@ class Configuration(BaseModel):
         default=False,
         title="移除思考 Token",
         description="是否从模型响应中移除 <think> token",
-    )
-    use_tool_calling: bool = Field(
-        default=False,
-        title="使用工具调用",
-        description="使用工具调用而非 JSON 模式进行结构化输出",
     )
     llm_api_key: str | None = Field(
         default=None,
@@ -205,7 +195,3 @@ class Configuration(BaseModel):
                     raw_values[key] = value
 
         return cls(**raw_values)
-
-    def resolved_model(self) -> str | None:
-        """尽力解析要使用的模型标识符。"""
-        return self.llm_model_id

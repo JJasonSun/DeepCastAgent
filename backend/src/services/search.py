@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 MAX_TOKENS_PER_SOURCE = 2000
 
 _tavily_client = None
-_serpapi_key: str | None = None
 _search_lock = threading.Lock()
 
 
@@ -153,7 +152,6 @@ def dispatch_search(
 
 def prepare_research_context(
     search_result: dict[str, Any] | None,
-    answer_text: str | None,
     config: Configuration,
 ) -> tuple[str, str]:
     """
@@ -168,8 +166,5 @@ def prepare_research_context(
         max_tokens_per_source=MAX_TOKENS_PER_SOURCE,
         fetch_full_page=config.fetch_full_page,
     )
-
-    if answer_text:
-        context = f"AI直接答案：\n{answer_text}\n\n{context}"
 
     return sources_summary, context

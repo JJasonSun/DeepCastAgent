@@ -79,7 +79,7 @@ def _mask_secret(value: str | None, visible: int = 4) -> str:
     return f"{value[:visible]}...{value[-visible:]}"
 
 
-def _build_config(payload: ResearchRequest) -> Configuration:
+def _build_config() -> Configuration:
     return Configuration.from_env()
 
 
@@ -90,8 +90,7 @@ def create_app() -> FastAPI:
     _active_agent: dict[str, DeepResearchAgent | None] = {"current": None}
 
     # 确保输出目录存在（使用绝对路径，基于 backend 根目录）
-    backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_dir = os.path.join(backend_root, "output")
+    output_dir = os.path.join(str(_backend_root), "output")
     os.makedirs(output_dir, exist_ok=True)
 
     @asynccontextmanager
@@ -99,15 +98,13 @@ def create_app() -> FastAPI:
         """应用生命周期管理：启动时记录配置，关闭时清理资源。"""
         config = Configuration.from_env()
         logger.info(
-            "DeepResearch configuration loaded: provider=%s model=%s base_url=%s search_api=%s "
-            "max_loops=%s fetch_full_page=%s tool_calling=%s strip_thinking=%s api_key=%s",
-            config.llm_provider,
-            config.resolved_model() or "unset",
+            "DeepResearch configuration loaded: model=%s base_url=%s search_api=%s "
+            "max_loops=%s fetch_full_page=%s strip_thinking=%s api_key=%s",
+            config.llm_model_id or "unset",
             config.llm_base_url or "unset",
             config.search_api.value,
             config.max_web_research_loops,
             config.fetch_full_page,
-            config.use_tool_calling,
             config.strip_thinking_tokens,
             _mask_secret(config.llm_api_key),
         )
@@ -166,7 +163,7 @@ def create_app() -> FastAPI:
         执行完整的研究流程，并在 HTTP 响应中一次性返回所有结果。
         """
         try:
-            config = _build_config(payload)
+            config = _build_config()
             agent = DeepResearchAgent(config=config)
             result = agent.run(payload.topic)
         except ValueError as exc:  # Likely due to unsupported configuration
@@ -228,7 +225,7 @@ def create_app() -> FastAPI:
         支持客户端断开连接时自动取消后端任务。
         """
         try:
-            config = _build_config(payload)
+            config = _build_config()
             agent = DeepResearchAgent(config=config)
             _active_agent["current"] = agent  # 注册活跃 agent 以支持取消
         except ValueError as exc:

@@ -58,10 +58,9 @@ const logs = ref<LogEntry[]>([]);
 const reportReady = ref(false);
 const podcastReady = ref(false);
 
-const audioProgress = reactive({ current: 0, total: 0, role: "" });
+const audioProgress = reactive({ current: 0, total: 0 });
 const taskProgress = reactive({ completed: 0, total: 0 });
 const progressPercent = ref(0);
-const currentStatusMessage = ref("");
 const isWaiting = ref(false);
 const waitingDots = ref(".");
 let waitingInterval: ReturnType<typeof setInterval> | null = null;
@@ -69,6 +68,7 @@ let waitingInterval: ReturnType<typeof setInterval> | null = null;
 const reportMarkdown = ref("");
 const audioUrl = ref("");
 
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 let abortController: AbortController | null = null;
 
 const productionRef = ref<InstanceType<typeof ProductionView> | null>(null);
@@ -115,7 +115,6 @@ async function startProduction() {
   taskProgress.completed = 0;
   taskProgress.total = 0;
   progressPercent.value = 2;
-  currentStatusMessage.value = "正在初始化...";
   reportReady.value = false;
   podcastReady.value = false;
 
@@ -144,8 +143,6 @@ async function startProduction() {
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
-  console.log("Event:", event.type, event);
-
   if (event.type === "log") {
     const msg = String((event as any).message || "");
     const cleanMsg = msg.replace(/\u001b\[\d+m/g, "");
@@ -155,7 +152,6 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     if (ttsMatch) {
       audioProgress.current = parseInt(ttsMatch[1], 10);
       audioProgress.total = parseInt(ttsMatch[2], 10);
-      currentStatusMessage.value = `音频生成: ${audioProgress.current}/${audioProgress.total}`;
     }
     return;
   }
@@ -164,7 +160,6 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     const payload = event as any;
     const stage = payload.stage;
     const message = payload.message || "";
-    currentStatusMessage.value = message;
 
     addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     addLog(`📌 [STAGE] ${stage.toUpperCase()} - ${message}`);
@@ -233,7 +228,6 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     const p = event as any;
     audioProgress.current = p.current;
     audioProgress.total = p.total;
-    currentStatusMessage.value = `生成音频: ${p.role} (${p.current}/${p.total})`;
     if (p.total > 0) {
       progressPercent.value = 70 + Math.round((p.current / p.total) * 25);
     }
@@ -243,12 +237,10 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     const p = event as any;
     const filename = String(p.file).split(/[\\/]/).pop();
     if (filename) {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-      audioUrl.value = `${baseUrl}/output/audio/${filename}`;
+      audioUrl.value = `${apiBaseUrl}/output/audio/${filename}`;
       podcastReady.value = true;
       productionStage.value = "done";
       progressPercent.value = 100;
-      currentStatusMessage.value = "🎉 播客制作完成！";
       stopWaitingAnimation();
       addLog(`🎉 [PODCAST] 制作完成: ${filename}`);
     }
@@ -259,7 +251,6 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     addLog(`🛑 [CANCELLED] ${msg}`);
     stopWaitingAnimation();
     productionStage.value = "cancelled";
-    currentStatusMessage.value = "任务已取消";
     return;
   }
 
@@ -270,28 +261,20 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     progressPercent.value = 100;
 
     if (!podcastReady.value && audioProgress.total > 0) {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-      fetch(`${baseUrl}/api/audio/latest`)
+      fetch(`${apiBaseUrl}/api/audio/latest`)
         .then(res => res.json())
         .then(data => {
           if (data.file) {
-            audioUrl.value = `${baseUrl}${data.url}`;
+            audioUrl.value = `${apiBaseUrl}${data.url}`;
             podcastReady.value = true;
-            currentStatusMessage.value = "🎉 播客制作完成！";
             addLog(`🎉 [PODCAST] 找到音频文件: ${data.file}`);
           } else {
-            currentStatusMessage.value = "任务完成（音频未生成）";
             addLog(`⚠️ 未找到音频文件: ${data.error || "未知错误"}`);
           }
         })
         .catch(err => {
-          currentStatusMessage.value = "任务完成（无法获取音频）";
           addLog(`⚠️ 获取音频文件失败: ${err.message}`);
         });
-    } else if (podcastReady.value) {
-      currentStatusMessage.value = "🎉 播客制作完成！";
-    } else {
-      currentStatusMessage.value = "任务完成（音频可能未生成）";
     }
   }
 }
@@ -315,7 +298,6 @@ function cancelProduction() {
 
     setTimeout(() => {
       currentView.value = "setup";
-      currentStatusMessage.value = "";
     }, 1000);
   }
 }
@@ -323,7 +305,6 @@ function cancelProduction() {
 function resetApp() {
   currentView.value = "setup";
   form.topic = "";
-  currentStatusMessage.value = "";
   reportReady.value = false;
   podcastReady.value = false;
   audioUrl.value = "";

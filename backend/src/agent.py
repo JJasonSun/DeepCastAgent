@@ -33,10 +33,10 @@ class DeepResearchAgent:
         """使用配置和共享工具初始化协调器。"""
         self.config = config or Configuration.from_env()
 
-        # OpenAI 客户端（smart / fast / default）
-        self.default_client = self._init_client(self.config.llm_model_id)
-        self.smart_client = self._init_client(self.config.smart_llm_model)
-        self.fast_client = self._init_client(self.config.fast_llm_model)
+        # OpenAI 客户端（模型在每次请求中指定，客户端可共享）
+        self._client = self._init_client()
+        self.smart_client = self._client
+        self.fast_client = self._client
 
         # 笔记管理器
         self.note_tool = (
@@ -72,7 +72,7 @@ class DeepResearchAgent:
     # ------------------------------------------------------------------
     # 公共 API
     # ------------------------------------------------------------------
-    def _init_client(self, model_id_override: str | None = None) -> OpenAI:
+    def _init_client(self) -> OpenAI:
         """根据配置创建 OpenAI 客户端。"""
         return OpenAI(
             api_key=self.config.llm_api_key,
@@ -560,7 +560,6 @@ class DeepResearchAgent:
 
         sources_summary, context = prepare_research_context(
             search_result,
-            answer_text,
             self.config,
         )
 

@@ -43,8 +43,6 @@ def test_ffmpeg():
             
     except Exception as e:
         print(f"❌ Exception: {e}")
-        # import traceback
-        # traceback.print_exc()
 
 if __name__ == "__main__":
     test_ffmpeg()

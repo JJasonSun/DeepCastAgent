@@ -1,4 +1,4 @@
-"""结构化笔记管理器，替代 HelloAgents 的 NoteTool。"""
+"""结构化笔记管理器。"""
 
 from __future__ import annotations
 

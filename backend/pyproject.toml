@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+dev = ["ruff>=0.12.7"]
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
@@ -67,7 +67,3 @@ lint.ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[dependency-groups]
-dev = [
-    "ruff>=0.12.7",
-]
