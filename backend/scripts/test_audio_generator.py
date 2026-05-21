@@ -58,8 +58,8 @@ class TestAudioGenerationService(unittest.TestCase):
     def test_get_preset_voice(self):
         self.assertEqual(self.service._get_preset_voice("Host"), "苏打")
         self.assertEqual(self.service._get_preset_voice("苏打"), "苏打")
-        self.assertEqual(self.service._get_preset_voice("Guest"), "冰糖")
-        self.assertEqual(self.service._get_preset_voice("冰糖"), "冰糖")
+        self.assertEqual(self.service._get_preset_voice("Guest"), "茉莉")
+        self.assertEqual(self.service._get_preset_voice("茉莉"), "茉莉")
         self.assertEqual(self.service._get_preset_voice("Unknown"), "苏打")
 
     def test_build_director_instruction(self):

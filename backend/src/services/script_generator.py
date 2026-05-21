@@ -126,7 +126,7 @@ class ScriptGenerationService:
                     # 标准化角色名
                     if role.lower() in ["host", "苏打"]:
                         role = "Host"
-                    elif role.lower() in ["guest", "冰糖"]:
+                    elif role.lower() in ["guest", "冰糖", "茉莉"]:
                         role = "Guest"
                     entry = {"role": role, "content": content}
                     # 保留可选的情感和音频标签字段
