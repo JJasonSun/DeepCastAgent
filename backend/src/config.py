@@ -151,6 +151,26 @@ class Configuration(BaseModel):
         title="TTS 超时",
         description="TTS 请求超时时间（秒）",
     )
+    max_research_refine_rounds: int = Field(
+        default=2,
+        title="最大深度搜索轮次",
+        description="初始研究完成后的迭代精炼轮次上限（0 表示不精炼）",
+    )
+    max_report_refine_rounds: int = Field(
+        default=1,
+        title="报告精炼轮次",
+        description="报告生成后的批判-修改循环次数（0 表示不精炼）",
+    )
+    enable_search_filter: bool = Field(
+        default=True,
+        title="搜索结果过滤",
+        description="是否使用 LLM 评估搜索结果质量，过滤低价值内容",
+    )
+    enable_memory: bool = Field(
+        default=True,
+        title="长期记忆",
+        description="是否启用研究记忆管理，跨任务持久化关键发现",
+    )
 
     @field_validator("notes_workspace", "audio_output_dir")
     @classmethod

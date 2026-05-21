@@ -207,6 +207,50 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     }
   }
 
+  if (event.type === "search_query") {
+    const p = event as any;
+    addLog(`🔎 [SEARCH] 正在搜索: "${p.query}"`);
+  }
+
+  if (event.type === "sources") {
+    const p = event as any;
+    const count = p.result_count;
+    if (count !== undefined) {
+      addLog(`📊 [SEARCH] 获取到 ${count} 条搜索结果`);
+    }
+  }
+
+  if (event.type === "task_findings") {
+    const p = event as any;
+    const findings = p.findings || [];
+    if (findings.length > 0) {
+      addLog(`💡 [FINDINGS] ${p.title} 关键发现:`);
+      for (const finding of findings) {
+        addLog(`   · ${finding}`);
+      }
+    }
+  }
+
+  if (event.type === "refine_round") {
+    const p = event as any;
+    addLog(`🔍 [DEEP SEARCH] ${p.message || `深度搜索分析第 ${p.round}/${p.max_rounds} 轮...`}`);
+  }
+
+  if (event.type === "refine_saturation") {
+    const p = event as any;
+    addLog(`✅ [DEEP SEARCH] ${p.message || `信息饱和: ${p.reason}`}`);
+  }
+
+  if (event.type === "report_refine") {
+    const p = event as any;
+    if (p.phase === "critique") {
+      addLog(`🔍 [REPORT] ${p.message}`);
+    } else if (p.phase === "result") {
+      const icon = p.verdict === "pass" ? "✅" : "🔄";
+      addLog(`${icon} [REPORT] ${p.message}`);
+    }
+  }
+
   if (event.type === "final_report") {
     reportMarkdown.value = String((event as any).report);
     reportReady.value = true;

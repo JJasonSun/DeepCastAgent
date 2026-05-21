@@ -6,7 +6,11 @@ import logging
 import threading
 from typing import Any
 
+from openai import OpenAI
+
 from config import Configuration
+from prompts import search_result_filter_instructions
+from services.llm import call_llm_json
 from utils import (
     deduplicate_and_format_sources,
     format_sources,
@@ -168,3 +172,91 @@ def prepare_research_context(
     )
 
     return sources_summary, context
+
+
+# 搜索结果过滤输出的 JSON Schema
+FILTER_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "useful": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["index", "useful", "reason"],
+            },
+        }
+    },
+    "required": ["results"],
+}
+
+
+def filter_search_results(
+    results: list[dict[str, Any]],
+    research_topic: str,
+    client: OpenAI,
+    config: Configuration,
+) -> list[dict[str, Any]]:
+    """使用 LLM 评估搜索结果质量，过滤掉低价值内容。
+
+    Args:
+        results: 原始搜索结果列表。
+        research_topic: 研究主题。
+        client: OpenAI 客户端。
+        config: 配置对象。
+
+    Returns:
+        过滤后的高质量搜索结果列表。
+    """
+    if not results or len(results) <= 1:
+        return results
+
+    # 构建结果摘要供 LLM 评估
+    results_text = []
+    for idx, item in enumerate(results):
+        title = item.get("title", "")
+        content = item.get("content", "")[:200]
+        url = item.get("url", "")
+        results_text.append(f"[{idx}] 标题: {title}\n    摘要: {content}\n    URL: {url}")
+
+    prompt = search_result_filter_instructions.format(
+        research_topic=research_topic,
+        search_results="\n\n".join(results_text),
+    )
+
+    filter_result = call_llm_json(
+        client=client,
+        system_prompt="你是一名信息筛选专家。",
+        user_prompt=prompt,
+        model=config.fast_llm_model,
+        json_schema=FILTER_JSON_SCHEMA,
+        schema_name="search_filter",
+    )
+
+    if not filter_result or not isinstance(filter_result, dict):
+        logger.warning("Search filter returned no result, keeping all results")
+        return results
+
+    # 根据评估结果过滤
+    judgments = filter_result.get("results", [])
+    useful_indices = set()
+    for judgment in judgments:
+        if isinstance(judgment, dict) and judgment.get("useful", False):
+            idx = judgment.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(results):
+                useful_indices.add(idx)
+
+    if not useful_indices:
+        logger.info("Search filter: all %d results filtered out, keeping all", len(results))
+        return results
+
+    filtered = [results[i] for i in sorted(useful_indices)]
+    removed_count = len(results) - len(filtered)
+    if removed_count > 0:
+        logger.info("Search filter: removed %d low-quality results, kept %d", removed_count, len(filtered))
+
+    return filtered

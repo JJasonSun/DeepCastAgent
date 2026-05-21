@@ -15,11 +15,12 @@ from config import Configuration
 from models import SummaryState, SummaryStateOutput, TodoItem
 from services.audio_generator import AudioGenerationService
 from services.audio_synthesizer import PodcastSynthesisService
+from services.memory_manager import MemoryManager
 from services.note_manager import NoteManager
 from services.planner import PlanningService
 from services.reporter import ReportingService
 from services.script_generator import ScriptGenerationService
-from services.search import dispatch_search, prepare_research_context
+from services.search import dispatch_search, filter_search_results, prepare_research_context
 from services.summarizer import SummarizationService
 from services.tool_events import ToolCallTracker
 
@@ -59,6 +60,7 @@ class DeepResearchAgent:
         self.script_generator = ScriptGenerationService(self.config)
         self.audio_generator = AudioGenerationService(self.config)
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
+        self.memory_manager = MemoryManager(self.config, self.fast_client) if config.enable_memory else None
 
     def cancel(self) -> None:
         """请求取消当前正在执行的研究任务。"""
@@ -91,12 +93,17 @@ class DeepResearchAgent:
         此方法按顺序执行以下步骤：
         1. 初始化状态和规划任务。
         2. 串行执行每个任务（搜索 + 总结）。
-        3. 生成最终报告。
-        4. 生成播客脚本。
-        5. 生成音频文件并合成播客。
+        3. 迭代式深度搜索（信息饱和检测）。
+        4. 生成最终报告（含 Self-Refine 精炼）。
+        5. 生成播客脚本。
+        6. 生成音频文件并合成播客。
         """
         state = SummaryState(research_topic=topic)
-        state.todo_items = self.planner.plan_todo_list(state)
+
+        # 检索相关历史记忆
+        historical_context = self._retrieve_historical_context(topic)
+
+        state.todo_items = self.planner.plan_todo_list(state, historical_context)
         self._drain_tool_events(state)
 
         if not state.todo_items:
@@ -107,11 +114,18 @@ class DeepResearchAgent:
             for _ in self._execute_task(state, task, emit_stream=False):
                 pass
 
-        report = self.reporting.generate_report(state)
+        # 迭代式深度搜索
+        self._refine_research(state)
+
+        report = self.reporting.generate_report_with_refine(state)
         self._drain_tool_events(state)
         state.structured_report = report
         state.running_summary = report
         self._persist_final_report(state, report)
+
+        # 保存研究记忆（长期记忆）
+        if self.memory_manager:
+            self.memory_manager.save_research_memory(state)
 
         script = self.script_generator.generate_script(state)
         self._drain_tool_events(state)
@@ -145,6 +159,11 @@ class DeepResearchAgent:
         logger.debug("Starting streaming research: topic=%s", topic)
         yield {"type": "status", "message": "初始化研究流程"}
 
+        # 检索相关历史记忆
+        self._historical_context = self._retrieve_historical_context(topic)
+        if self._historical_context:
+            yield {"type": "log", "message": "📚 [MEMORY] 已加载相关历史研究记忆"}
+
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -155,7 +174,13 @@ class DeepResearchAgent:
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
 
-        # Phase 2: 报告生成
+        # Phase 1.5: 迭代式深度搜索（信息饱和检测）
+        yield from self._stream_refine_phase(state)
+        if self.is_cancelled():
+            yield {"type": "cancelled", "message": "研究任务已取消"}
+            return
+
+        # Phase 2: 报告生成（含 Self-Refine 精炼）
         yield from self._stream_report_phase(state)
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
@@ -183,7 +208,8 @@ class DeepResearchAgent:
         """Phase 1: 规划任务并行执行搜索 + 总结。"""
         if self.is_cancelled():
             return
-        state.todo_items = self.planner.plan_todo_list(state)
+        historical_context = getattr(self, "_historical_context", "")
+        state.todo_items = self.planner.plan_todo_list(state, historical_context)
         if self.is_cancelled():
             return
         for event in self._drain_tool_events(state, step=0):
@@ -311,7 +337,7 @@ class DeepResearchAgent:
                 thread.join(timeout=1.0)
 
     def _stream_report_phase(self, state: SummaryState) -> Iterator[dict[str, Any]]:
-        """Phase 2: 生成深度研究报告。"""
+        """Phase 2: 生成深度研究报告（含 Self-Refine 精炼）。"""
         yield {
             "type": "stage_change",
             "stage": "report",
@@ -321,9 +347,17 @@ class DeepResearchAgent:
 
         if self.is_cancelled():
             return
-        report = self.reporting.generate_report(state)
+
+        # 使用带精炼的报告生成（流式收集事件）
+        report, refine_events = self.reporting.generate_report_with_refine_stream(state)
+
         if self.is_cancelled():
             return
+
+        # 输出精炼过程中的事件
+        for event in refine_events:
+            yield event
+
         final_step = len(state.todo_items) + 1
         for event in self._drain_tool_events(state, step=final_step):
             yield event
@@ -338,12 +372,196 @@ class DeepResearchAgent:
         if note_event:
             yield note_event
 
+        # 保存研究记忆（长期记忆）
+        if self.memory_manager:
+            memory_id = self.memory_manager.save_research_memory(state)
+            if memory_id:
+                yield {"type": "log", "message": f"📚 [MEMORY] 研究记忆已保存: {memory_id}"}
+
         yield {
             "type": "final_report",
             "report": report,
             "note_id": state.report_note_id,
             "note_path": state.report_note_path,
         }
+
+    def _stream_refine_phase(self, state: SummaryState) -> Iterator[dict[str, Any]]:
+        """Phase 1.5: 迭代式深度搜索（信息饱和检测）。"""
+        max_rounds = self.config.max_research_refine_rounds
+        if max_rounds <= 0:
+            return
+
+        for round_num in range(max_rounds):
+            if self.is_cancelled():
+                return
+
+            yield {
+                "type": "refine_round",
+                "round": round_num + 1,
+                "max_rounds": max_rounds,
+                "message": f"深度搜索分析第 {round_num + 1}/{max_rounds} 轮...",
+            }
+            yield {"type": "log", "message": f"[深度搜索] 正在分析已有信息完整性（第 {round_num + 1} 轮）..."}
+
+            should_continue, reason, new_tasks = self.planner.analyze_and_refine(
+                state, round_num, max_rounds,
+            )
+
+            if not should_continue or not new_tasks:
+                yield {
+                    "type": "refine_saturation",
+                    "round": round_num + 1,
+                    "reason": reason,
+                    "message": f"信息饱和: {reason}",
+                }
+                yield {"type": "log", "message": f"[深度搜索] 信息饱和: {reason}"}
+                break
+
+            # 将新任务添加到状态中
+            yield {"type": "log", "message": f"[深度搜索] 发现信息缺口: {reason}，生成 {len(new_tasks)} 个补充任务"}
+
+            # 为新任务分配 channel 信息
+            channel_map: dict[int, dict[str, Any]] = {}
+            for index, task in enumerate(new_tasks, start=1):
+                token = f"refine_{round_num}_{task.id}"
+                task.stream_token = token
+                channel_map[task.id] = {"step": len(state.todo_items) + index, "token": token}
+
+            serialized_tasks = [self._serialize_task(t) for t in new_tasks]
+            yield {
+                "type": "todo_list",
+                "tasks": serialized_tasks,
+                "step": len(state.todo_items),
+                "is_refine": True,
+                "round": round_num + 1,
+            }
+
+            # 并行执行补充任务（复用 _stream_research_phase 的并行模式）
+            event_queue: Queue[dict[str, Any]] = Queue()
+
+            def enqueue(
+                event: dict[str, Any],
+                *,
+                task: TodoItem | None = None,
+                step_override: int | None = None,
+            ) -> None:
+                payload = dict(event)
+                target_task_id = payload.get("task_id")
+                if task is not None:
+                    target_task_id = task.id
+                    payload["task_id"] = task.id
+                channel = channel_map.get(target_task_id) if target_task_id is not None else None
+                if channel:
+                    payload.setdefault("step", channel["step"])
+                    payload["stream_token"] = channel["token"]
+                if step_override is not None:
+                    payload["step"] = step_override
+                event_queue.put(payload)
+
+            self._set_tool_event_sink(lambda ev: enqueue(ev))
+
+            threads: list[Thread] = []
+
+            def worker(task: TodoItem, step: int) -> None:
+                try:
+                    if self.is_cancelled():
+                        enqueue({"type": "__task_done__", "task_id": task.id})
+                        return
+                    enqueue(
+                        {
+                            "type": "task_status",
+                            "task_id": task.id,
+                            "status": "in_progress",
+                            "title": task.title,
+                            "intent": task.intent,
+                            "query": task.query,
+                        },
+                        task=task,
+                    )
+                    for event in self._execute_task(state, task, emit_stream=True, step=step):
+                        if self.is_cancelled():
+                            break
+                        enqueue(event, task=task)
+                except Exception as exc:
+                    if not self.is_cancelled():
+                        logger.exception("Refine task execution failed", exc_info=exc)
+                    enqueue(
+                        {
+                            "type": "task_status",
+                            "task_id": task.id,
+                            "status": "failed",
+                            "detail": str(exc),
+                            "title": task.title,
+                            "intent": task.intent,
+                            "query": task.query,
+                        },
+                        task=task,
+                    )
+                finally:
+                    enqueue({"type": "__task_done__", "task_id": task.id})
+
+            for task in new_tasks:
+                state.todo_items.append(task)
+                step = channel_map.get(task.id, {}).get("step", 0)
+                thread = Thread(target=worker, args=(task, step), daemon=True)
+                threads.append(thread)
+                thread.start()
+
+            active_workers = len(new_tasks)
+            finished_workers = 0
+
+            try:
+                while finished_workers < active_workers:
+                    try:
+                        event = event_queue.get(timeout=0.5)
+                    except Empty:
+                        if self.is_cancelled():
+                            yield {"type": "cancelled", "message": "研究任务已取消"}
+                            return
+                        continue
+                    if event.get("type") == "__task_done__":
+                        finished_workers += 1
+                        continue
+                    yield event
+
+                while True:
+                    try:
+                        event = event_queue.get_nowait()
+                    except Empty:
+                        break
+                    if event.get("type") != "__task_done__":
+                        yield event
+            finally:
+                self._set_tool_event_sink(None)
+                for thread in threads:
+                    thread.join(timeout=1.0)
+
+    def _refine_research(self, state: SummaryState) -> None:
+        """同步模式：迭代式深度搜索。"""
+        max_rounds = self.config.max_research_refine_rounds
+        if max_rounds <= 0:
+            return
+
+        for round_num in range(max_rounds):
+            if self.is_cancelled():
+                return
+
+            logger.info("Refine research round %d/%d", round_num + 1, max_rounds)
+
+            should_continue, reason, new_tasks = self.planner.analyze_and_refine(
+                state, round_num, max_rounds,
+            )
+
+            if not should_continue or not new_tasks:
+                logger.info("Information saturation: %s", reason)
+                break
+
+            logger.info("Found information gap: %s, executing %d supplement tasks", reason, len(new_tasks))
+
+            for task in new_tasks:
+                state.todo_items.append(task)
+                for _ in self._execute_task(state, task, emit_stream=False):
+                    pass
 
     def _stream_script_phase(self, state: SummaryState) -> Iterator[dict[str, Any] | int]:
         """
@@ -513,6 +731,16 @@ class DeepResearchAgent:
         """
         task.status = "in_progress"
 
+        # 透明化：展示搜索查询
+        if emit_stream:
+            yield {
+                "type": "search_query",
+                "task_id": task.id,
+                "query": task.query,
+                "title": task.title,
+                "step": step,
+            }
+
         search_result, notices, answer_text, backend = dispatch_search(
             task.query,
             self.config,
@@ -558,6 +786,25 @@ class DeepResearchAgent:
             if not emit_stream:
                 self._drain_tool_events(state)
 
+        # 搜索结果质量评估：过滤低价值内容
+        if self.config.enable_search_filter and search_result and search_result.get("results"):
+            original_count = len(search_result["results"])
+            filtered_results = filter_search_results(
+                search_result["results"],
+                state.research_topic or task.query,
+                self._client,
+                self.config,
+            )
+            if len(filtered_results) < original_count:
+                search_result["results"] = filtered_results
+                if emit_stream:
+                    yield {
+                        "type": "log",
+                        "message": f"[FILTER] 搜索结果过滤: {original_count} → {len(filtered_results)} 条",
+                        "task_id": task.id,
+                        "step": step,
+                    }
+
         sources_summary, context = prepare_research_context(
             search_result,
             self.config,
@@ -580,6 +827,7 @@ class DeepResearchAgent:
                 "task_id": task.id,
                 "latest_sources": sources_summary,
                 "raw_context": context,
+                "result_count": len(search_result.get("results", [])),
                 "step": step,
                 "backend": backend,
                 "note_id": task.note_id,
@@ -625,8 +873,62 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
                 "step": step,
             }
+            # 透明化：提取关键发现展示给用户
+            findings = self._extract_key_findings(task.summary)
+            if findings:
+                yield {
+                    "type": "task_findings",
+                    "task_id": task.id,
+                    "title": task.title,
+                    "findings": findings,
+                    "step": step,
+                }
         else:
             self._drain_tool_events(state)
+
+    @staticmethod
+    def _extract_key_findings(summary: str, max_findings: int = 3) -> list[str]:
+        """从任务总结中提取关键发现（前 N 个要点）。"""
+        if not summary:
+            return []
+
+        findings: list[str] = []
+        for line in summary.splitlines():
+            line = line.strip()
+            # 匹配 Markdown 有序/无序列表项
+            if line.startswith(("- ", "* ", "+ ")):
+                finding = line[2:].strip()
+            elif len(line) > 3 and line[0].isdigit() and line[1] in (".", "、", ")"):
+                finding = line[2:].strip()
+            else:
+                continue
+
+            # 去掉 Markdown 格式符号
+            finding = finding.replace("**", "").replace("__", "").strip()
+            if finding and len(finding) > 5:
+                # 截断过长的发现
+                if len(finding) > 100:
+                    finding = finding[:100] + "..."
+                findings.append(finding)
+
+            if len(findings) >= max_findings:
+                break
+
+        return findings
+
+    def _retrieve_historical_context(self, topic: str) -> str:
+        """检索与当前主题相关的历史记忆，格式化为上下文文本。"""
+        if not self.memory_manager:
+            return ""
+
+        try:
+            memories = self.memory_manager.retrieve_relevant_memories(topic, max_results=3)
+            if memories:
+                return self.memory_manager.format_memories_for_context(memories)
+        except Exception as e:
+            logger.warning("Failed to retrieve historical memories: %s", e)
+
+        return ""
 
     def _drain_tool_events(
         self,
