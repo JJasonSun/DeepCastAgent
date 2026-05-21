@@ -27,12 +27,13 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 ```
 输入主题 "AI Agent 的发展趋势"
-  → [15s] 规划 3 个研究子任务
-  → [45s] 并行搜索 + 摘要，实时展示 Agent 动作
-  → [60s] 生成结构化研究报告
-  → [75s] 转化为双人对谈脚本（Host 苏打 + Guest 冰糖）
-  → [120s] 逐句语音合成 + 拼接
-  → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告
+  → [15s] 规划 3 个研究子任务，检索相关历史记忆
+  → [45s] 并行搜索（LLM 过滤 + 权威性排序）+ 摘要，实时展示 Agent 动作
+  → [60s] 迭代深度搜索：分析信息缺口 → 补充任务 → 信息饱和终止
+  → [90s] 生成报告 + Self-Refine（Critic 评估 → 修改）
+  → [105s] 转化为双人对谈脚本（Host 苏打 + Guest 茉莉，含情感标注）
+  → [150s] 导演模式 TTS 逐句语音合成 + 拼接
+  → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告 + 长期记忆持久化
 ```
 
 ## 竞品对比
@@ -71,13 +72,31 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **问题：** 单人 TTS 朗读研究报告枯燥且信息密度低。
 
-**决策：** 设计 Host（苏打，好奇幽默的主持人）+ Guest（冰糖，专业严谨的嘉宾）双角色，通过提问-解答的对话结构组织内容。双人对话天然具备"捧哏/逗哏"节奏，大脑更易吸收。
+**决策：** 设计 Host（苏打，好奇幽默的主持人）+ Guest（茉莉，专业严谨的嘉宾）双角色，通过提问-解答的对话结构组织内容。双人对话天然具备"捧哏/逗哏"节奏，大脑更易吸收。
 
 ### 5. Plan-and-Solve 多智能体工作流
 
 **问题：** 复杂主题无法一步到位生成高质量内容。
 
-**决策：** 将任务拆解为 5 个专业 Agent 协同：规划 Agent（拆解子任务）→ 搜索 Agent（混合搜索 Tavily + SerpApi）→ 总结 Agent（逐任务摘要）→ 报告 Agent（整合结构化报告）→ 脚本 Agent（转化为对话）。并行执行提升效率。
+**决策：** 将任务拆解为 5 个专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序）→ WriterAgent（报告撰写 + Self-Refine 精炼）→ ScriptGenerationService（对话脚本）→ AudioGenerationService（TTS 合成）。并行执行提升效率，DirectorAgent 统一协调。
+
+### 7. 迭代式深度搜索 + 智能终止
+
+**问题：** 单轮搜索无法覆盖复杂主题的所有维度，信息深度不足。
+
+**决策：** 初始任务完成后，LLM 自动分析已有信息、识别知识缺口、生成补充搜索任务，迭代至信息饱和。同时引入定量信息增益指标——基于关键词重叠度计算信息重复度，超过阈值自动终止，避免无效搜索浪费成本。
+
+### 8. 报告 Self-Refine 质量闭环
+
+**问题：** 单次 LLM 生成的报告质量不稳定，缺乏自我纠错能力。
+
+**决策：** 报告初稿生成后，Critic Agent 从逻辑严谨性、数据支撑度、专业性等维度评估质量并给出结构化反馈，Writer Agent 据此修改。形成"生成 → 批判 → 修改"的质量自闭环。
+
+### 9. 混合记忆管理
+
+**问题：** 每次研究都是独立的，无法利用历史研究发现。
+
+**决策：** 引入 MemoryManager，研究完成后使用 LLM 提取关键发现（实体、关键词、结论）持久化为结构化记忆。下次研究前自动检索相关记忆注入规划 prompt，避免重复搜索已知信息。
 
 ### 6. 导演模式拟人语音（情感化 TTS）
 
@@ -116,9 +135,9 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 | 版本 | 重点 | 状态 |
 |------|------|------|
-| v1.0 | 主题 → 播客 MVP，跑通搜索到合成全流程 | 已完成 |
-| v1.5 | 支持 URL / PDF / 公众号文章作为输入源 | 规划中 |
-| v2.0 | 研究报告生成后增加"审批"环节，用户可修改大纲后再生成 | 规划中 |
+| v1.0 | 主题 → 播客 MVP，跑通搜索到合成全流程 | ✅ 已完成 |
+| v1.5 | 迭代深度搜索、报告 Self-Refine、搜索过滤、多智能体架构、记忆管理 | ✅ 已完成 |
+| v2.0 | 支持 URL / PDF / 公众号文章作为输入源 | 规划中 |
 | v2.5 | 音色克隆 + 个性化主持人，打造专属"AI 知识伴游" | 规划中 |
 
 ---
@@ -127,21 +146,24 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 ```
 用户输入主题
+  → MemoryManager → 检索相关历史研究记忆
   → PlanningService（smart LLM + XGrammar 结构化输出）→ TodoItem[] 任务列表
-  → [并行] SearchTool（Tavily + SerpApi）→ SummarizationService（fast LLM）
-  → ReportingService（smart LLM）→ 结构化 Markdown 报告
-  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本（含情感标注）
+  → [并行] SearchTool（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
+  → RefinePhase（smart LLM）→ 分析信息缺口 → 补充搜索（迭代至饱和 + 智能终止）
+  → ReportingService（smart LLM）→ Self-Refine：初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
+  → MemoryManager → 提取关键发现持久化
+  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本（含 emotion + audio_tag）
   → AudioGenerationService（MiMo TTS 导演模式 + VoiceDesign）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
 ```
 
 **技术栈：**
-- **智能体编排：** 自研多智能体工作流（基于 OpenAI SDK + XGrammar 结构化输出）
+- **智能体编排：** 自研多智能体工作流（DirectorAgent + PlannerAgent/ResearcherAgent/CriticAgent/WriterAgent），基于 OpenAI SDK + XGrammar 结构化输出
 - **大语言模型：** `ecnu-reasoner`（深度推理）、`ecnu-max`（快速响应）
 - **语音合成：** MiMo-V2.5-TTS（导演模式 + VoiceDesign 文本音色设计 + 音频标签）
-- **后端：** Python 3.10+, FastAPI, Loguru
-- **前端：** Vue 3, Vite, TypeScript, Tailwind CSS + DaisyUI
-- **搜索增强：** Tavily API + SerpApi 混合搜索
-- **音频处理：** Pydub + FFmpeg
+- **后端：** Python 3.10+, FastAPI, Pydantic
+- **前端：** Vue 3, Vite, TypeScript, Tailwind CSS 4 + DaisyUI 5
+- **搜索增强：** Tavily API + SerpApi 混合搜索 + LLM 结果过滤 + 域名权威性排序
+- **音频处理：** FFmpeg
 
 ## 快速开始
 
@@ -187,18 +209,28 @@ python scripts/verify_search.py         # 测试搜索 API
 ```
 backend/
   src/
-    agent.py               # DeepResearchAgent 核心编排器
+    agent.py               # DeepResearchAgent 核心编排器（集成 Director）
     config.py              # 配置中心（环境变量加载）
     models.py              # 数据模型（TodoItem, SummaryState）
     prompts.py             # Agent 系统提示词模板
-    services/
-      planner.py           # 任务拆解
-      search.py            # 混合搜索调度
+    utils.py               # 工具函数（格式化、去重）
+    agents/                # 多智能体抽象层
+      base.py              # BaseAgent 抽象基类 + AgentResult
+      planner.py           # PlannerAgent（任务分解、信息增益分析）
+      researcher.py        # ResearcherAgent（搜索、过滤、权威性排序、摘要）
+      critic.py            # CriticAgent（报告质量评估）
+      writer.py            # WriterAgent（报告撰写、脚本生成）
+      director.py          # DirectorAgent（协调器、Agent 注册表）
+    services/              # 服务层（Agent 的底层实现）
+      planner.py           # 任务拆解 + 迭代精炼分析
+      search.py            # 混合搜索 + LLM 结果过滤 + 域名权威性排序
       summarizer.py        # 逐任务摘要
-      reporter.py          # 报告生成
+      reporter.py          # 报告生成 + Self-Refine 精炼
       script_generator.py  # 对话脚本生成
-      audio_generator.py   # TTS 语音合成
+      audio_generator.py   # TTS 语音合成（导演模式 + VoiceDesign）
       audio_synthesizer.py # 音频拼接
+      memory_manager.py    # 长期记忆管理（提取、持久化、检索）
+      llm.py               # LLM 调用封装（JSON 结构化输出）
   scripts/                 # 验证 & 测试脚本
 frontend/
   src/

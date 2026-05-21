@@ -20,7 +20,7 @@ from services.note_manager import NoteManager
 from services.planner import PlanningService
 from services.reporter import ReportingService
 from services.script_generator import ScriptGenerationService
-from services.search import dispatch_search, filter_search_results, prepare_research_context
+from services.search import dispatch_search, filter_search_results, prepare_research_context, sort_by_authority
 from services.summarizer import SummarizationService
 from services.tool_events import ToolCallTracker
 
@@ -62,6 +62,9 @@ class DeepResearchAgent:
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
         self.memory_manager = MemoryManager(self.config, self.fast_client) if config.enable_memory else None
 
+        # 多智能体架构：Director + 专业 Agent
+        self.director = self._init_director()
+
     def cancel(self) -> None:
         """请求取消当前正在执行的研究任务。"""
         logger.info("Cancel requested for research agent")
@@ -80,6 +83,27 @@ class DeepResearchAgent:
             api_key=self.config.llm_api_key,
             base_url=self.config.llm_base_url,
         )
+
+    def _init_director(self) -> "DirectorAgent":
+        """初始化 DirectorAgent 并注册所有专业 Agent。"""
+        from agents import (
+            CriticAgent,
+            DirectorAgent,
+            PlannerAgent,
+            ResearcherAgent,
+            WriterAgent,
+        )
+
+        director = DirectorAgent()
+        director.register(PlannerAgent(self.planner))
+        director.register(ResearcherAgent(self.summarizer, self.config, self._client))
+        director.register(CriticAgent(self.reporting))
+        director.register(WriterAgent(self.reporting, self.script_generator))
+        logger.info(
+            "Director initialized with agents: %s",
+            director.registered_agents,
+        )
+        return director
 
     def _set_tool_event_sink(self, sink: Any) -> None:
         """启用或禁用立即工具事件回调。"""
@@ -536,6 +560,20 @@ class DeepResearchAgent:
                 for thread in threads:
                     thread.join(timeout=1.0)
 
+            # 智能终止：检查信息增益
+            completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
+            if completed_new:
+                gain = self.planner.calculate_information_gain(state, completed_new)
+                if gain >= self.config.min_information_gain:
+                    yield {
+                        "type": "refine_saturation",
+                        "round": round_num + 1,
+                        "reason": f"信息增益过低（{gain:.0%} 重复），已无新信息",
+                        "message": f"智能终止: 信息重复度 {gain:.0%}，终止深度搜索",
+                    }
+                    yield {"type": "log", "message": f"[深度搜索] 智能终止: 信息重复度 {gain:.0%}，已无新信息"}
+                    break
+
     def _refine_research(self, state: SummaryState) -> None:
         """同步模式：迭代式深度搜索。"""
         max_rounds = self.config.max_research_refine_rounds
@@ -562,6 +600,14 @@ class DeepResearchAgent:
                 state.todo_items.append(task)
                 for _ in self._execute_task(state, task, emit_stream=False):
                     pass
+
+            # 智能终止：检查信息增益
+            completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
+            if completed_new:
+                gain = self.planner.calculate_information_gain(state, completed_new)
+                if gain >= self.config.min_information_gain:
+                    logger.info("Smart termination: %.0%% overlap, stopping refine", gain * 100)
+                    break
 
     def _stream_script_phase(self, state: SummaryState) -> Iterator[dict[str, Any] | int]:
         """
@@ -804,6 +850,10 @@ class DeepResearchAgent:
                         "task_id": task.id,
                         "step": step,
                     }
+
+        # 信息源可信度分层：按域名权威性排序
+        if search_result and search_result.get("results"):
+            search_result["results"] = sort_by_authority(search_result["results"])
 
         sources_summary, context = prepare_research_context(
             search_result,

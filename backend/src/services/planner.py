@@ -220,3 +220,53 @@ class PlanningService:
         )
 
         return should_continue, reason, new_tasks
+
+    @staticmethod
+    def calculate_information_gain(
+        state: SummaryState,
+        new_tasks: list[TodoItem],
+    ) -> float:
+        """计算本轮新增信息的增益比例（0-1）。
+
+        基于新任务 summary 与已有信息的关键词重叠度。
+        返回值越高表示重复越多（信息增益越低）。
+
+        Args:
+            state: 当前研究状态。
+            new_tasks: 本轮新增的任务列表。
+
+        Returns:
+            信息重复度（0-1），1 表示完全重复，0 表示全新信息。
+        """
+        import re
+
+        def _simple_tokenize(text: str) -> set[str]:
+            """简单的中英文分词。"""
+            text = re.sub(r'[^\w\s]', ' ', text)
+            words = set()
+            for segment in text.split():
+                if segment.isascii():
+                    if len(segment) > 1:
+                        words.add(segment.lower())
+                else:
+                    for size in (2, 3, 4):
+                        for i in range(len(segment) - size + 1):
+                            words.add(segment[i:i + size])
+            return words
+
+        # 提取已有信息的关键词
+        existing_texts = [
+            t.summary for t in state.todo_items
+            if t.summary and t.status == "completed" and t not in new_tasks
+        ]
+        existing_words = _simple_tokenize(" ".join(existing_texts))
+
+        # 提取新信息的关键词
+        new_texts = [t.summary for t in new_tasks if t.summary]
+        new_words = _simple_tokenize(" ".join(new_texts))
+
+        if not new_words:
+            return 1.0  # 无新信息，视为完全重复
+
+        overlap = len(existing_words & new_words)
+        return overlap / max(len(new_words), 1)

@@ -171,6 +171,11 @@ class Configuration(BaseModel):
         title="长期记忆",
         description="是否启用研究记忆管理，跨任务持久化关键发现",
     )
+    min_information_gain: float = Field(
+        default=0.8,
+        title="信息增益阈值",
+        description="精炼阶段的信息重复度上限（0-1），超过此值则终止深度搜索（0.8 表示 80% 重复）",
+    )
 
     @field_validator("notes_workspace", "audio_output_dir")
     @classmethod

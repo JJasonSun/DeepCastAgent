@@ -260,3 +260,64 @@ def filter_search_results(
         logger.info("Search filter: removed %d low-quality results, kept %d", removed_count, len(filtered))
 
     return filtered
+
+
+# ── 信息源可信度分层 ──────────────────────────────────────────
+
+# 域名权威性白名单（高 → 中 → 低）
+DOMAIN_AUTHORITY: dict[str, int] = {
+    # 权威学术/官方来源（10 分）
+    "arxiv.org": 10, "nature.com": 10, "science.org": 10,
+    "ieee.org": 10, "acm.org": 10, "springer.com": 10,
+    "wiley.com": 10, "cell.com": 10, "thelancet.com": 10,
+    "gov.cn": 10, ".gov": 10, "who.int": 10,
+    "worldbank.org": 10, "imf.org": 10, "oecd.org": 10,
+    # 头部媒体/科技媒体（8 分）
+    "reuters.com": 8, "bbc.com": 8, "nytimes.com": 8,
+    "washingtonpost.com": 8, "ft.com": 8, "economist.com": 8,
+    "techcrunch.com": 8, "wired.com": 8, "theverge.com": 8,
+    "ars-technica.com": 8, "engadget.com": 8,
+    "36kr.com": 8, "jiemian.com": 8, "caixin.com": 8,
+    # 行业分析/技术社区（6 分）
+    "medium.com": 6, "github.com": 6, "stackoverflow.com": 6,
+    "huggingface.co": 6, "openai.com": 6, "anthropic.com": 6,
+    "zhihu.com": 6, "infoq.cn": 6,
+    # 一般技术博客（5 分）
+    "csdn.net": 5, "juejin.cn": 5, "cnblogs.com": 5,
+    "segmentfault.com": 5, "jianshu.com": 5,
+}
+
+
+def score_source_authority(url: str) -> int:
+    """根据域名返回权威性评分（1-10）。
+
+    评分规则：
+    - 学术期刊、政府机构、国际组织：10 分
+    - 头部媒体、科技媒体：8 分
+    - 行业分析、技术社区：6 分
+    - 一般技术博客：5 分
+    - 未知来源：3 分（默认）
+    """
+    if not url:
+        return 3
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower()
+    except Exception:
+        return 3
+
+    for known_domain, score in DOMAIN_AUTHORITY.items():
+        if known_domain in domain:
+            return score
+    return 3
+
+
+def sort_by_authority(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按权威性评分降序排列搜索结果。
+
+    高权威来源排在前面，确保在上下文拼接时优先被 LLM 参考。
+    """
+    for r in results:
+        r["authority_score"] = score_source_authority(r.get("url", ""))
+    results.sort(key=lambda x: x.get("authority_score", 0), reverse=True)
+    return results
