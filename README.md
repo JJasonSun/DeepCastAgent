@@ -29,8 +29,8 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 输入主题 "AI Agent 的发展趋势"
   → [15s] 规划 3 个研究子任务，检索相关历史记忆
   → [45s] 并行搜索（LLM 过滤 + 权威性排序）+ 摘要，实时展示 Agent 动作
-  → [60s] 迭代深度搜索：分析信息缺口 → 补充任务 → 信息饱和终止
-  → [90s] 生成报告 + Self-Refine（Critic 评估 → 修改）
+  → [60s] 迭代深度搜索：递归反思覆盖情况 → 识别信息缺口 → 补充任务 → 信息饱和终止
+  → [90s] 生成报告大纲 → 撰写报告 + Self-Refine（Critic 评估 → 修改）
   → [105s] 生成节目蓝图（Hook/分段/转场/CTA）→ 双人对谈脚本（Host 苏打 + Guest 茉莉，含情感标注）
   → [150s] 导演模式 TTS 逐句语音合成 + 拼接
   → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告 + 长期记忆持久化
@@ -84,13 +84,13 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **问题：** 单轮搜索无法覆盖复杂主题的所有维度，信息深度不足。
 
-**决策：** 初始任务完成后，LLM 自动分析已有信息、识别知识缺口、生成补充搜索任务，迭代至信息饱和。同时引入定量信息增益指标——基于关键词重叠度计算信息重复度，超过阈值自动终止，避免无效搜索浪费成本。
+**决策：** 初始任务完成后，LLM 自动进行递归反思：总结已有覆盖、列出知识缺口、制定下一轮搜索策略和优先来源类型，再生成补充搜索任务，迭代至信息饱和。同时引入定量信息增益指标——基于关键词重叠度计算信息重复度，超过阈值自动终止，避免无效搜索浪费成本。搜索模式仍保持 Tavily + SerpApi 混合搜索。
 
-### 8. 报告 Self-Refine 质量闭环
+### 8. 报告大纲 + Self-Refine 质量闭环
 
 **问题：** 单次 LLM 生成的报告质量不稳定，缺乏自我纠错能力。
 
-**决策：** 报告初稿生成后，Critic Agent 从逻辑严谨性、数据支撑度、专业性等维度评估质量并给出结构化反馈，Writer Agent 据此修改。形成"生成 → 批判 → 修改"的质量自闭环。
+**决策：** 正式写作前先生成结构化报告大纲，明确读者问题、核心主线、章节论点、证据需求和来源风险；报告初稿生成后，Critic Agent 再从逻辑严谨性、数据支撑度、专业性、引用可信度等维度评估质量并给出结构化反馈，Writer Agent 据此修改。形成"大纲 → 初稿 → 批判 → 修改"的质量闭环。
 
 ### 9. 混合记忆管理
 
@@ -149,8 +149,8 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
   → MemoryManager → 检索相关历史研究记忆
   → PlanningService（smart LLM + XGrammar 结构化输出）→ TodoItem[] 任务列表
   → [并行] SearchService（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
-  → RefinePhase（smart LLM）→ 分析信息缺口 → 补充搜索（迭代至饱和 + 智能终止）
-  → ReportingService（smart LLM）→ Self-Refine：初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
+  → RefinePhase（smart LLM）→ 递归反思覆盖/缺口/来源策略 → 补充搜索（迭代至饱和 + 智能终止）
+  → ReportingService（smart LLM）→ 报告大纲 → 初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
   → MemoryManager → 提取关键发现持久化
   → ScriptGenerationService（fast LLM）→ 节目蓝图 JSON → 双人对话 JSON 脚本（含 emotion + audio_tag）
   → AudioGenerationService（MiMo TTS 导演模式 + VoiceDesign）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3

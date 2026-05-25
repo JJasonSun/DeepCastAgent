@@ -9,14 +9,82 @@ from openai import OpenAI
 
 from config import Configuration
 from models import SummaryState
-from prompts import report_critic_instructions, report_writer_instructions
+from prompts import (
+    report_critic_instructions,
+    report_outline_instructions,
+    report_writer_instructions,
+)
 from services.llm import call_llm, call_llm_json
 from services.text_processing import strip_tool_calls
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
 
-# 报告审稿输出的 JSON Schema
+# 报告大纲与审稿输出的 JSON Schema
+REPORT_OUTLINE_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "报告标题",
+        },
+        "reader_question": {
+            "type": "string",
+            "description": "报告主要回答的读者问题",
+        },
+        "thesis": {
+            "type": "string",
+            "description": "核心判断或主线观点",
+        },
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {
+                        "type": "string",
+                        "description": "章节标题",
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "本章作用",
+                    },
+                    "key_claims": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "关键论点",
+                    },
+                    "evidence_needed": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "需要引用的证据、数据或案例",
+                    },
+                    "table_suggestion": {
+                        "type": "string",
+                        "description": "适合使用的表格或对比方式",
+                    },
+                },
+                "required": [
+                    "heading",
+                    "purpose",
+                    "key_claims",
+                    "evidence_needed",
+                    "table_suggestion",
+                ],
+            },
+            "minItems": 3,
+            "maxItems": 7,
+        },
+        "source_risks": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "证据不足、来源偏单一或需要谨慎表述的地方",
+        },
+    },
+    "required": ["title", "reader_question", "thesis", "sections", "source_risks"],
+}
+
+
 CRITIC_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -75,24 +143,22 @@ class ReportingService:
         Returns:
             Markdown 格式的报告文本。
         """
-        tasks_block = []
-        for task in state.todo_items:
-            summary_block = task.summary or "暂无可用信息"
-            sources_block = task.sources_summary or "暂无来源"
-            tasks_block.append(
-                f"### 任务 {task.id}: {task.title}\n"
-                f"- 任务目标：{task.intent}\n"
-                f"- 检索查询：{task.query}\n"
-                f"- 执行状态：{task.status}\n"
-                f"- 任务总结：\n{summary_block}\n"
-                f"- 来源概览：\n{sources_block}\n"
+        tasks_context = self._build_tasks_context(state)
+        outline = self._generate_report_outline(state, tasks_context)
+        outline_block = ""
+        if outline:
+            outline_block = (
+                "<REPORT_OUTLINE>\n"
+                f"{self._format_outline(outline)}\n"
+                "</REPORT_OUTLINE>\n\n"
             )
 
         prompt = (
             f"研究主题：{state.research_topic}\n"
-            f"任务概览：\n{''.join(tasks_block)}\n"
+            f"{outline_block}"
+            f"<TASK_CONTEXT>\n{tasks_context}\n</TASK_CONTEXT>\n"
             "请整合所有任务的研究发现，撰写一份结构化的深度研究报告。"
-            "报告应包含：摘要、各主题的详细分析、关键发现、结论与展望。"
+            "报告必须围绕核心问题展开，保留证据线索，避免无来源的强结论。"
         )
 
         response = call_llm(
@@ -109,6 +175,79 @@ class ReportingService:
         report_text = strip_tool_calls(report_text).strip()
 
         return report_text or "报告生成失败，请检查输入。"
+
+    def _build_tasks_context(self, state: SummaryState) -> str:
+        """构建报告写作所需的任务上下文。"""
+        tasks_block = []
+        for task in state.todo_items:
+            summary_block = task.summary or "暂无可用信息"
+            sources_block = task.sources_summary or "暂无来源"
+            tasks_block.append(
+                f"### 任务 {task.id}: {task.title}\n"
+                f"- 任务目标：{task.intent}\n"
+                f"- 检索查询：{task.query}\n"
+                f"- 执行状态：{task.status}\n"
+                f"- 任务总结：\n{summary_block}\n"
+                f"- 来源概览：\n{sources_block}\n"
+            )
+        return "\n".join(tasks_block)
+
+    def _generate_report_outline(
+        self,
+        state: SummaryState,
+        tasks_context: str,
+    ) -> dict[str, Any] | None:
+        """先生成报告大纲，用于约束正式报告的结构、证据和主线。"""
+        if not self._config.enable_report_outline:
+            return None
+
+        prompt = (
+            f"研究主题：{state.research_topic}\n\n"
+            f"<TASK_CONTEXT>\n{tasks_context}\n</TASK_CONTEXT>"
+        )
+
+        result = call_llm_json(
+            client=self._client,
+            system_prompt=report_outline_instructions.strip(),
+            user_prompt=prompt,
+            model=self._config.smart_llm_model,
+            json_schema=REPORT_OUTLINE_JSON_SCHEMA,
+            schema_name="report_outline",
+        )
+
+        if isinstance(result, dict):
+            logger.info("Generated report outline: %s", result.get("title", "untitled"))
+            return result
+        logger.warning("Report outline generation returned no result; falling back to direct report generation")
+        return None
+
+    @staticmethod
+    def _format_outline(outline: dict[str, Any]) -> str:
+        """将结构化大纲格式化为可读上下文。"""
+        lines = [
+            f"标题：{outline.get('title', '')}",
+            f"读者问题：{outline.get('reader_question', '')}",
+            f"核心主线：{outline.get('thesis', '')}",
+            "",
+            "章节规划：",
+        ]
+        for idx, section in enumerate(outline.get("sections", []), 1):
+            if not isinstance(section, dict):
+                continue
+            key_claims = "；".join(section.get("key_claims", []) or [])
+            evidence = "；".join(section.get("evidence_needed", []) or [])
+            lines.extend([
+                f"{idx}. {section.get('heading', '')}",
+                f"   作用：{section.get('purpose', '')}",
+                f"   关键论点：{key_claims}",
+                f"   证据需求：{evidence}",
+                f"   表格建议：{section.get('table_suggestion', '')}",
+            ])
+        source_risks = outline.get("source_risks", [])
+        if source_risks:
+            lines.append("")
+            lines.append("来源风险：" + "；".join(str(risk) for risk in source_risks))
+        return "\n".join(lines)
 
     def generate_report_with_refine(self, state: SummaryState) -> str:
         """生成报告并通过批判-修改循环精炼质量。"""

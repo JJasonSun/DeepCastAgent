@@ -63,6 +63,23 @@ REFINE_JSON_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "判断原因（信息缺口或饱和理由）",
         },
+        "coverage_summary": {
+            "type": "string",
+            "description": "已有信息覆盖情况的简要总结",
+        },
+        "knowledge_gaps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "仍缺失或证据不足的信息",
+        },
+        "next_search_strategy": {
+            "type": "string",
+            "description": "下一轮搜索策略或终止理由",
+        },
+        "source_strategy": {
+            "type": "string",
+            "description": "应优先寻找的来源类型",
+        },
         "tasks": {
             "type": "array",
             "items": {
@@ -86,7 +103,15 @@ REFINE_JSON_SCHEMA: dict[str, Any] = {
             "maxItems": 3,
         },
     },
-    "required": ["continue_search", "reason", "tasks"],
+    "required": [
+        "continue_search",
+        "reason",
+        "coverage_summary",
+        "knowledge_gaps",
+        "next_search_strategy",
+        "source_strategy",
+        "tasks",
+    ],
 }
 
 
@@ -200,6 +225,22 @@ class PlanningService:
 
         should_continue = bool(result.get("continue_search", False))
         reason = str(result.get("reason", ""))
+        coverage_summary = str(result.get("coverage_summary", "")).strip()
+        knowledge_gaps = result.get("knowledge_gaps", [])
+        next_search_strategy = str(result.get("next_search_strategy", "")).strip()
+        source_strategy = str(result.get("source_strategy", "")).strip()
+        reflection_parts = [reason]
+        if coverage_summary:
+            reflection_parts.append(f"覆盖情况：{coverage_summary}")
+        if isinstance(knowledge_gaps, list) and knowledge_gaps:
+            gaps_text = "；".join(str(gap) for gap in knowledge_gaps if gap)
+            if gaps_text:
+                reflection_parts.append(f"信息缺口：{gaps_text}")
+        if next_search_strategy:
+            reflection_parts.append(f"搜索策略：{next_search_strategy}")
+        if source_strategy:
+            reflection_parts.append(f"来源策略：{source_strategy}")
+        reason = "\n".join(part for part in reflection_parts if part)
         tasks_payload = result.get("tasks", [])
 
         new_tasks: list[TodoItem] = []

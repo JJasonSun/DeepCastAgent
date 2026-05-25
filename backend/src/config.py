@@ -161,6 +161,11 @@ class Configuration(BaseModel):
         title="报告精炼轮次",
         description="报告生成后的批判-修改循环次数（0 表示不精炼）",
     )
+    enable_report_outline: bool = Field(
+        default=True,
+        title="报告大纲",
+        description="是否在生成正式报告前先生成结构化报告大纲",
+    )
     enable_search_filter: bool = Field(
         default=True,
         title="搜索结果过滤",
