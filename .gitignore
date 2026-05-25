@@ -87,3 +87,5 @@ output/
 .github/
 .claude/
 claude.md
+.agents/
+AGENTS.md

@@ -171,6 +171,11 @@ class Configuration(BaseModel):
         title="长期记忆",
         description="是否启用研究记忆管理，跨任务持久化关键发现",
     )
+    enable_script_blueprint: bool = Field(
+        default=True,
+        title="播客脚本蓝图",
+        description="是否先生成节目蓝图，再基于蓝图生成双人对话脚本",
+    )
     min_information_gain: float = Field(
         default=0.8,
         title="信息增益阈值",

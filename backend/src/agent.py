@@ -621,7 +621,7 @@ class DeepResearchAgent:
             "message": "正在将研究报告转化为双人对谈播客脚本...",
         }
         yield {"type": "log", "message": f"正在调用 {self.config.fast_llm_model} 模型生成播客脚本..."}
-        yield {"type": "log", "message": "脚本策划专家正在创作 Host (苏打) 与 Guest (茉莉) 的对话..."}
+        yield {"type": "log", "message": "脚本策划专家正在规划节目蓝图，并创作 Host (苏打) 与 Guest (茉莉) 的对话..."}
 
         if self.is_cancelled():
             return

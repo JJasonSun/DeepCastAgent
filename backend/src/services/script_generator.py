@@ -10,9 +10,90 @@ from openai import OpenAI
 
 from config import Configuration
 from models import SummaryState
-from prompts import script_writer_instructions
+from prompts import script_blueprint_instructions, script_writer_instructions
 
 logger = logging.getLogger(__name__)
+
+# 播客节目蓝图的 JSON Schema
+SCRIPT_BLUEPRINT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "本期节目标题"
+        },
+        "target_listener": {
+            "type": "string",
+            "description": "目标听众画像"
+        },
+        "tone": {
+            "type": "string",
+            "description": "节目语气、节奏和听感要求"
+        },
+        "hook": {
+            "type": "string",
+            "description": "前 15 秒吸引听众的开场 Hook"
+        },
+        "sections": {
+            "type": "array",
+            "description": "主体话题段落",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "segment_title": {
+                        "type": "string",
+                        "description": "段落标题"
+                    },
+                    "listener_question": {
+                        "type": "string",
+                        "description": "本段要替听众回答的问题"
+                    },
+                    "key_points": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "本段必须覆盖的关键事实、案例或观点"
+                    },
+                    "host_questions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Host 可以提出的追问"
+                    },
+                    "transition": {
+                        "type": "string",
+                        "description": "承接本段并引出下一段的转场逻辑"
+                    },
+                },
+                "required": [
+                    "segment_title",
+                    "listener_question",
+                    "key_points",
+                    "host_questions",
+                    "transition",
+                ],
+            },
+            "minItems": 3,
+            "maxItems": 3,
+        },
+        "closing": {
+            "type": "string",
+            "description": "结尾总结逻辑"
+        },
+        "cta": {
+            "type": "string",
+            "description": "自然的行动号召"
+        },
+    },
+    "required": [
+        "title",
+        "target_listener",
+        "tone",
+        "hook",
+        "sections",
+        "closing",
+        "cta",
+    ],
+}
+
 
 # 播客脚本的 JSON Schema
 SCRIPT_JSON_SCHEMA = {
@@ -38,10 +119,10 @@ SCRIPT_JSON_SCHEMA = {
                 "description": "可选的音频风格标签，控制细粒度语音表现，如：轻笑、叹气、语速加快、提高音量、放慢语速"
             }
         },
-        "required": ["role", "content"]
+        "required": ["role", "content", "emotion"]
     },
-    "minItems": 6,
-    "maxItems": 15
+    "minItems": 8,
+    "maxItems": 18
 }
 
 
@@ -80,7 +161,19 @@ class ScriptGenerationService:
         report_length = len(state.structured_report)
         logger.info("Generating script from report (%d chars) using structured output...", report_length)
 
-        user_prompt = f"<RESEARCH_REPORT>\n{state.structured_report}\n</RESEARCH_REPORT>"
+        blueprint = self._generate_blueprint(state.structured_report)
+        blueprint_block = ""
+        if blueprint:
+            blueprint_block = (
+                "<PODCAST_BLUEPRINT>\n"
+                f"{json.dumps(blueprint, ensure_ascii=False, indent=2)}\n"
+                "</PODCAST_BLUEPRINT>\n\n"
+            )
+
+        user_prompt = (
+            f"{blueprint_block}"
+            f"<RESEARCH_REPORT>\n{state.structured_report}\n</RESEARCH_REPORT>"
+        )
 
         try:
             response = self._client.chat.completions.create(
@@ -145,6 +238,43 @@ class ScriptGenerationService:
         except Exception as e:
             logger.error("Script generation failed: %s", e)
             return []
+
+    def _generate_blueprint(self, report: str) -> dict | None:
+        """先生成节目蓝图，用于约束后续对话脚本的结构和节奏。"""
+        if not self._config.enable_script_blueprint:
+            return None
+
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": script_blueprint_instructions.strip()},
+                    {"role": "user", "content": f"<RESEARCH_REPORT>\n{report}\n</RESEARCH_REPORT>"},
+                ],
+                temperature=0.4,
+                max_tokens=2048,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "podcast_blueprint",
+                        "schema": SCRIPT_BLUEPRINT_JSON_SCHEMA,
+                    },
+                },
+            )
+            content = response.choices[0].message.content
+            if not content:
+                logger.warning("Empty podcast blueprint response; falling back to direct script generation.")
+                return None
+            blueprint = json.loads(content)
+            if isinstance(blueprint, dict):
+                logger.info(
+                    "Generated podcast blueprint: %s",
+                    blueprint.get("title", "untitled"),
+                )
+                return blueprint
+        except Exception as e:
+            logger.warning("Podcast blueprint generation failed; falling back to direct script generation: %s", e)
+        return None
 
     def _parse_script_json(self, content: str) -> list | None:
         """

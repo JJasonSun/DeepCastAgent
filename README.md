@@ -31,7 +31,7 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
   → [45s] 并行搜索（LLM 过滤 + 权威性排序）+ 摘要，实时展示 Agent 动作
   → [60s] 迭代深度搜索：分析信息缺口 → 补充任务 → 信息饱和终止
   → [90s] 生成报告 + Self-Refine（Critic 评估 → 修改）
-  → [105s] 转化为双人对谈脚本（Host 苏打 + Guest 茉莉，含情感标注）
+  → [105s] 生成节目蓝图（Hook/分段/转场/CTA）→ 双人对谈脚本（Host 苏打 + Guest 茉莉，含情感标注）
   → [150s] 导演模式 TTS 逐句语音合成 + 拼接
   → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告 + 长期记忆持久化
 ```
@@ -72,13 +72,13 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **问题：** 单人 TTS 朗读研究报告枯燥且信息密度低。
 
-**决策：** 设计 Host（苏打，好奇幽默的主持人）+ Guest（茉莉，专业严谨的嘉宾）双角色，通过提问-解答的对话结构组织内容。双人对话天然具备"捧哏/逗哏"节奏，大脑更易吸收。
+**决策：** 设计 Host（苏打，好奇幽默的主持人）+ Guest（茉莉，专业严谨的嘉宾）双角色，并在生成台词前先生成节目蓝图，约束 Hook、主体分段、自然转场和收尾 CTA。双人对话不只是把报告改写成问答，而是按"听众问题 → 嘉宾解释 → 主持追问 → 关键 takeaway"组织内容。
 
 ### 5. Plan-and-Solve 多智能体工作流
 
 **问题：** 复杂主题无法一步到位生成高质量内容。
 
-**决策：** 将任务拆解为 5 个专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序）→ WriterAgent（报告撰写 + Self-Refine 精炼）→ ScriptGenerationService（对话脚本）→ AudioGenerationService（TTS 合成）。并行执行提升效率，DirectorAgent 统一协调。
+**决策：** 将任务拆解为 5 个专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序）→ WriterAgent（报告撰写 + Self-Refine 精炼）→ ScriptGenerationService（节目蓝图 + 对话脚本）→ AudioGenerationService（TTS 合成）。并行执行提升效率，DirectorAgent 统一协调。
 
 ### 7. 迭代式深度搜索 + 智能终止
 
@@ -148,11 +148,11 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 用户输入主题
   → MemoryManager → 检索相关历史研究记忆
   → PlanningService（smart LLM + XGrammar 结构化输出）→ TodoItem[] 任务列表
-  → [并行] SearchTool（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
+  → [并行] SearchService（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
   → RefinePhase（smart LLM）→ 分析信息缺口 → 补充搜索（迭代至饱和 + 智能终止）
   → ReportingService（smart LLM）→ Self-Refine：初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
   → MemoryManager → 提取关键发现持久化
-  → ScriptGenerationService（fast LLM）→ 双人对话 JSON 脚本（含 emotion + audio_tag）
+  → ScriptGenerationService（fast LLM）→ 节目蓝图 JSON → 双人对话 JSON 脚本（含 emotion + audio_tag）
   → AudioGenerationService（MiMo TTS 导演模式 + VoiceDesign）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
 ```
 
@@ -226,7 +226,7 @@ backend/
       search.py            # 混合搜索 + LLM 结果过滤 + 域名权威性排序
       summarizer.py        # 逐任务摘要
       reporter.py          # 报告生成 + Self-Refine 精炼
-      script_generator.py  # 对话脚本生成
+      script_generator.py  # 节目蓝图 + 对话脚本生成
       audio_generator.py   # TTS 语音合成（导演模式 + VoiceDesign）
       audio_synthesizer.py # 音频拼接
       memory_manager.py    # 长期记忆管理（提取、持久化、检索）
