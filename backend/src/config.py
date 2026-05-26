@@ -46,10 +46,10 @@ class Configuration(BaseModel):
         title="笔记工作区",
         description="NoteTool 持久化任务笔记的目录",
     )
-    fetch_full_page: bool = Field(
-        default=True,
-        title="获取完整页面",
-        description="在搜索结果中包含完整页面内容",
+    include_raw_source_content: bool = Field(
+        default=False,
+        title="包含原始来源正文",
+        description="是否请求搜索后端返回 raw_content，并在可用时拼入研究上下文；不会主动抓取网页全文",
     )
     strip_thinking_tokens: bool = Field(
         default=False,
@@ -141,6 +141,11 @@ class Configuration(BaseModel):
         title="LLM 超时",
         description="LLM 请求超时时间（秒）",
     )
+    llm_long_timeout: int = Field(
+        default=180,
+        title="LLM 长任务超时",
+        description="规划、报告、评审、脚本等长耗时 LLM 请求的超时时间（秒）",
+    )
     llm_max_retries: int = Field(
         default=3,
         title="LLM 最大重试次数",
@@ -171,6 +176,11 @@ class Configuration(BaseModel):
         title="SSE 心跳间隔",
         description="流式接口无业务事件时向前端发送 heartbeat 的间隔秒数",
     )
+    workflow_max_seconds: int = Field(
+        default=1800,
+        title="工作流最长运行时间",
+        description="单次流式生产任务的最长运行秒数，超过后主动取消并返回错误",
+    )
     max_research_refine_rounds: int = Field(
         default=2,
         title="最大深度搜索轮次",
@@ -192,9 +202,9 @@ class Configuration(BaseModel):
         description="是否使用 LLM 评估搜索结果质量，过滤低价值内容",
     )
     enable_memory: bool = Field(
-        default=True,
-        title="长期记忆",
-        description="是否启用研究记忆管理，跨任务持久化关键发现",
+        default=False,
+        title="历史研究记忆",
+        description="可选：是否启用跨任务历史研究记忆；默认关闭，适合专题系列内容复用。",
     )
     enable_script_blueprint: bool = Field(
         default=True,
@@ -244,6 +254,10 @@ class Configuration(BaseModel):
             env_key = field_name.upper()
             if env_key in os.environ:
                 raw_values[field_name] = os.environ[env_key]
+
+        # 兼容旧配置名：FETCH_FULL_PAGE 实际语义是包含搜索后端返回的 raw_content
+        if "include_raw_source_content" not in raw_values and "FETCH_FULL_PAGE" in os.environ:
+            raw_values["include_raw_source_content"] = os.environ["FETCH_FULL_PAGE"]
 
         # 处理 NO_PROXY
         no_proxy = os.getenv("NO_PROXY")

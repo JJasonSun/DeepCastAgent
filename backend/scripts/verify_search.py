@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -10,10 +11,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src'
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env'))
 
 from config import Configuration
-from services.search import get_global_search_tool
+from services.search import dispatch_search
 
 
-def test_search_configuration():
+def _mask_key(value: str | None) -> str:
+    if not value:
+        return "None"
+    return "*" * 8 + value[-4:]
+
+
+def _print_results(results: list[dict[str, Any]]) -> None:
+    for index, item in enumerate(results, 1):
+        title = item.get("title") or "(untitled)"
+        url = item.get("url") or "(no url)"
+        authority = item.get("authority_score")
+        suffix = f" authority={authority}" if authority is not None else ""
+        print(f"  {index}. {title} ({url}){suffix}")
+
+
+def test_search_configuration() -> None:
     print("Testing search configuration...")
     
     # Load config from env
@@ -23,16 +39,18 @@ def test_search_configuration():
     tavily_key = config.tavily_api_key
     serpapi_key = config.serpapi_api_key
     
-    print(f"Tavily Key: {'*' * 8 + tavily_key[-4:] if tavily_key else 'None'}")
-    print(f"SerpApi Key: {'*' * 8 + serpapi_key[-4:] if serpapi_key else 'None'}")
-    print(f"Search API: {config.search_api}")
-    
-    # Initialize search tool
-    search_tool = get_global_search_tool(config)
-    print(f"Search Tool Backend: {search_tool.backend}")
-    print(f"Available Backends: {search_tool.available_backends}")
-    
-    if not search_tool.available_backends:
+    print(f"Tavily Key: {_mask_key(tavily_key)}")
+    print(f"SerpApi Key: {_mask_key(serpapi_key)}")
+    print(f"Search API: {config.search_api.value}")
+
+    available_backends = []
+    if tavily_key:
+        available_backends.append("tavily")
+    if serpapi_key:
+        available_backends.append("serpapi")
+    print(f"Available Backends: {available_backends or 'None'}")
+
+    if not available_backends:
         print("❌ No search backends available. Please check API keys.")
         return
 
@@ -41,22 +59,15 @@ def test_search_configuration():
     print(f"\nRunning search for: '{query}'...")
     
     try:
-        response = search_tool.run({
-            "input": query,
-            "backend": "hybrid",
-            "max_results": 2
-        })
-        
-        if isinstance(response, dict):
-            backend = response.get("backend", "unknown")
-            results = response.get("results", [])
-            print(f"✅ Search successful using backend: {backend}")
-            print(f"Found {len(results)} results:")
-            for i, res in enumerate(results, 1):
-                print(f"  {i}. {res.get('title')} ({res.get('url')})")
-        else:
-            print(f"❌ Unexpected response format: {type(response)}")
-            print(response)
+        response, notices, backend = dispatch_search(query, config)
+        results = response.get("results", []) if response else []
+        print(f"✅ Search completed using backend: {backend}")
+        if notices:
+            print("Notices:")
+            for notice in notices:
+                print(f"  - {notice}")
+        print(f"Found {len(results)} results:")
+        _print_results(results)
             
     except Exception as e:
         print(f"❌ Search failed: {e}")

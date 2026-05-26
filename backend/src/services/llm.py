@@ -8,7 +8,13 @@ import time
 from collections.abc import Callable, Generator
 from typing import Any
 
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    RateLimitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +111,66 @@ def build_json_mode_instructions(json_schema: dict[str, Any]) -> str:
     )
 
 
+def _matches_json_type(value: Any, schema_type: str) -> bool:
+    if schema_type == "object":
+        return isinstance(value, dict)
+    if schema_type == "array":
+        return isinstance(value, list)
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    return True
+
+
+def validate_json_schema(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+    """轻量 JSON Schema 校验，覆盖项目当前使用的 type/required/enum/items/properties。"""
+    errors: list[str] = []
+
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        branch_errors = [validate_json_schema(value, branch, path) for branch in schema["anyOf"]]
+        if not any(not item for item in branch_errors):
+            errors.append(f"{path}: does not match anyOf")
+        return errors
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str) and not _matches_json_type(value, schema_type):
+        errors.append(f"{path}: expected {schema_type}, got {type(value).__name__}")
+        return errors
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        errors.append(f"{path}: expected one of {enum_values}, got {value!r}")
+
+    if isinstance(value, dict):
+        properties = schema.get("properties", {}) or {}
+        required = schema.get("required", []) or []
+        for key in required:
+            if key not in value:
+                errors.append(f"{path}.{key}: required field missing")
+        for key, child_schema in properties.items():
+            if key in value and isinstance(child_schema, dict):
+                errors.extend(validate_json_schema(value[key], child_schema, f"{path}.{key}"))
+
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            errors.append(f"{path}: expected at least {min_items} items, got {len(value)}")
+        if isinstance(max_items, int) and len(value) > max_items:
+            errors.append(f"{path}: expected at most {max_items} items, got {len(value)}")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(validate_json_schema(item, item_schema, f"{path}[{index}]"))
+
+    return errors
+
+
 def _is_thinking_enabled(extra_body: dict[str, Any] | None) -> bool:
     """判断当前请求是否启用了 DeepSeek thinking mode。"""
     if not isinstance(extra_body, dict):
@@ -126,6 +192,7 @@ def call_llm(
     tool_choice: str | dict[str, Any] | None = None,
     max_retries: int = 3,
     retry_base_delay: float = 1.0,
+    timeout: float | None = None,
 ) -> str:
     """同步调用 LLM 并返回完整文本。"""
     request_args: dict[str, Any] = {
@@ -137,6 +204,7 @@ def call_llm(
         "max_tokens": max_tokens,
         "extra_body": extra_body,
         "reasoning_effort": reasoning_effort,
+        "timeout": timeout,
     }
     if not _is_thinking_enabled(extra_body):
         request_args["temperature"] = temperature
@@ -168,6 +236,8 @@ def call_llm_json(
     reasoning_effort: str | None = None,
     max_retries: int = 3,
     retry_base_delay: float = 1.0,
+    timeout: float | None = None,
+    response_transform: Callable[[Any], Any] | None = None,
 ) -> dict[str, Any] | list | None:
     """使用 DeepSeek JSON Output 调用 LLM，返回解析后的 JSON 对象。"""
     json_mode_hint = build_json_mode_instructions(json_schema)
@@ -182,6 +252,7 @@ def call_llm_json(
         "response_format": {"type": "json_object"},
         "extra_body": extra_body,
         "reasoning_effort": reasoning_effort,
+        "timeout": timeout,
     }
     if not _is_thinking_enabled(extra_body):
         request_args["temperature"] = temperature
@@ -197,10 +268,17 @@ def call_llm_json(
     if not content:
         return None
     try:
-        return json.loads(content)
+        parsed = json.loads(content)
     except json.JSONDecodeError:
         logger.error("Structured output returned invalid JSON: %s", content[:500])
         return None
+    if response_transform is not None:
+        parsed = response_transform(parsed)
+    schema_errors = validate_json_schema(parsed, json_schema)
+    if schema_errors:
+        logger.error("Structured output failed schema validation: %s", "; ".join(schema_errors[:8]))
+        return None
+    return parsed
 
 
 def stream_llm(
@@ -216,6 +294,7 @@ def stream_llm(
     tool_choice: str | dict[str, Any] | None = None,
     max_retries: int = 3,
     retry_base_delay: float = 1.0,
+    timeout: float | None = None,
 ) -> Generator[str, None, None]:
     """流式调用 LLM，逐块 yield 文本片段。"""
     request_args: dict[str, Any] = {
@@ -228,6 +307,7 @@ def stream_llm(
         "stream": True,
         "extra_body": extra_body,
         "reasoning_effort": reasoning_effort,
+        "timeout": timeout,
     }
     if not _is_thinking_enabled(extra_body):
         request_args["temperature"] = temperature

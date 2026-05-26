@@ -117,12 +117,12 @@ def create_app() -> FastAPI:
         config = Configuration.from_env()
         logger.info(
             "DeepResearch configuration loaded: model=%s base_url=%s search_api=%s "
-            "max_loops=%s fetch_full_page=%s strip_thinking=%s api_key=%s",
+            "max_loops=%s include_raw_source_content=%s strip_thinking=%s api_key=%s",
             config.active_llm_model(),
             config.llm_base_url or "unset",
             config.search_api.value,
             config.max_web_research_loops,
-            config.fetch_full_page,
+            config.include_raw_source_content,
             config.strip_thinking_tokens,
             _mask_secret(config.llm_api_key),
         )
@@ -288,6 +288,7 @@ def create_app() -> FastAPI:
             loop.run_in_executor(executor, run_generator)
             heartbeat_interval = max(config.sse_heartbeat_interval, 5)
             last_heartbeat_at = loop.time()
+            started_at = loop.time()
 
             try:
                 while True:
@@ -301,6 +302,14 @@ def create_app() -> FastAPI:
                             yield 'data: {"type": "cancelled", "message": "研究任务已被用户取消"}\n\n'
                             break
                         now = loop.time()
+                        if now - started_at >= config.workflow_max_seconds:
+                            agent.cancel()
+                            error = {
+                                "type": "error",
+                                "detail": f"工作流超过最长运行时间 {config.workflow_max_seconds} 秒，已自动取消",
+                            }
+                            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+                            break
                         if now - last_heartbeat_at >= heartbeat_interval:
                             heartbeat = {
                                 "type": "heartbeat",

@@ -49,7 +49,7 @@ def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> l
             lambda: client.search(
                 query=query,
                 max_results=max_results,
-                include_raw_content=False,
+                include_raw_content=config.include_raw_source_content,
             ),
             operation_name="Tavily search",
             max_retries=config.search_max_retries,
@@ -61,6 +61,7 @@ def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> l
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
                 "content": item.get("content", ""),
+                "raw_content": item.get("raw_content", ""),
             })
         return results
     except Exception as exc:
@@ -177,7 +178,7 @@ def prepare_research_context(
     context = deduplicate_and_format_sources(
         search_result or {"results": []},
         max_tokens_per_source=MAX_TOKENS_PER_SOURCE,
-        fetch_full_page=config.fetch_full_page,
+        include_raw_source_content=config.include_raw_source_content,
     )
 
     return sources_summary, context

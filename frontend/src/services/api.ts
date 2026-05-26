@@ -7,10 +7,33 @@ export interface ResearchRequest {
   llm_reasoning_effort?: "high" | "max";
 }
 
-export interface ResearchStreamEvent {
-  type: string;
-  [key: string]: unknown;
-}
+export type ResearchStreamEvent =
+  | { type: "status"; message?: string }
+  | { type: "log"; message?: string }
+  | { type: "heartbeat"; message?: string }
+  | { type: "client_retry"; attempt: number; max_retries: number; message: string }
+  | { type: "error"; detail?: string; message?: string }
+  | { type: "stage_change"; stage: "report" | "script" | "audio" | "synthesis"; message?: string }
+  | { type: "todo_list"; tasks: unknown[]; step?: number; is_refine?: boolean; round?: number }
+  | { type: "task_status"; task_id: number; status: "in_progress" | "completed" | "failed" | "skipped"; title?: string; intent?: string; query?: string; detail?: string }
+  | { type: "search_query"; task_id?: number; query: string; title?: string }
+  | { type: "sources"; task_id?: number; result_count?: number; latest_sources?: string; raw_context?: string; backend?: string }
+  | { type: "task_summary_chunk"; task_id?: number; content: string; note_id?: string; step?: number }
+  | { type: "task_findings"; task_id?: number; title?: string; findings: string[] }
+  | { type: "refine_round"; round: number; max_rounds: number; message?: string }
+  | { type: "refine_saturation"; round?: number; reason?: string; message?: string }
+  | { type: "report_refine"; phase: "critique" | "result"; round?: number; max_rounds?: number; score?: number; verdict?: string; issue_count?: number; message?: string }
+  | { type: "report_note"; note_id: string; title?: string; note_path?: string; content?: string }
+  | { type: "tool_call"; event_id?: number; agent?: string; tool?: string; parameters?: unknown; result?: string; task_id?: number; note_id?: string; note_path?: string }
+  | { type: "podcast_blueprint"; blueprint?: unknown; section_count?: number }
+  | { type: "final_report"; report: string; note_id?: string; note_path?: string }
+  | { type: "podcast_script"; script?: unknown; turns?: number }
+  | { type: "audio_start"; total?: number; message?: string }
+  | { type: "audio_progress"; current: number; total: number; role?: string; preview?: string; message?: string }
+  | { type: "audio_generated"; files?: string[]; count?: number }
+  | { type: "podcast_ready"; file: string }
+  | { type: "cancelled"; message?: string }
+  | { type: "done" };
 
 export interface StreamOptions {
   signal?: AbortSignal;

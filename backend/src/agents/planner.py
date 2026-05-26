@@ -15,6 +15,7 @@ class PlannerAgent(BaseAgent):
     能力：
     - plan: 将主题分解为 3-5 个 TodoItem 子任务
     - analyze: 分析已有信息，判断是否需要补充搜索
+    - fallback: 生成兜底任务
     - gain: 计算信息增益比例
     """
 
@@ -27,7 +28,7 @@ class PlannerAgent(BaseAgent):
 
     @property
     def capabilities(self) -> list[str]:
-        return ["plan", "analyze", "gain"]
+        return ["plan", "analyze", "fallback", "gain"]
 
     def execute(self, context: dict[str, Any]) -> AgentResult:
         action = context.get("action", "plan")
@@ -37,6 +38,8 @@ class PlannerAgent(BaseAgent):
             return self._plan(context, state)
         elif action == "analyze":
             return self._analyze(context, state)
+        elif action == "fallback":
+            return self._fallback(context, state)
         elif action == "gain":
             return self._calculate_gain(context, state)
         else:
@@ -65,6 +68,14 @@ class PlannerAgent(BaseAgent):
                 "new_tasks": new_tasks,
             },
             metrics={"new_task_count": len(new_tasks)},
+        )
+
+    def _fallback(self, context: dict[str, Any], state: SummaryState) -> AgentResult:
+        task = self._service.create_fallback_task(state)
+        return AgentResult(
+            success=True,
+            data={"task": task},
+            metrics={"task_count": 1},
         )
 
     def _calculate_gain(self, context: dict[str, Any], state: SummaryState) -> AgentResult:

@@ -103,15 +103,18 @@
               <div class="z-10 relative mt-3">
                 <div class="pipeline-status-chip" :class="{
                   'pipeline-status-chip--done': productionStage === 'done',
-                  'pipeline-status-chip--cancelled': isCancelled
+                  'pipeline-status-chip--cancelled': isCancelled,
+                  'pipeline-status-chip--error': isError
                 }">
                   <span class="inline-block w-1.5 h-1.5 rounded-full mr-2" :class="
                     productionStage === 'done' ? 'bg-emerald-400' :
+                    isError ? 'bg-rose-400' :
                     isCancelled ? 'bg-red-400' :
                     'bg-blue-400 animate-pulse'
                   "></span>
                   <span class="text-[11px] font-medium">{{
                     productionStage === 'done' ? '制作完成' :
+                    isError ? '制作失败' :
                     isCancelled ? '已取消' :
                     '正在处理...'
                   }}</span>
@@ -230,7 +233,7 @@ import { ref, computed, toRef } from "vue";
 import TerminalLog from "./TerminalLog.vue";
 import type { LogEntry } from "./TerminalLog.vue";
 
-export type ProductionStage = "research" | "script" | "audio" | "done" | "cancelled";
+export type ProductionStage = "research" | "script" | "audio" | "done" | "cancelled" | "error";
 
 export interface PodcastBlueprintSection {
   segment_title?: string;
@@ -297,6 +300,7 @@ const currentIdx = computed(() => stepsOrder.indexOf(props.productionStage));
 const sectionCount = computed(() => props.podcastBlueprint?.sections?.length || 0);
 
 const isCancelled = computed(() => props.productionStage === 'cancelled');
+const isError = computed(() => props.productionStage === 'error');
 
 const stageLabel = computed(() => {
   const labels: Record<ProductionStage, string> = {
@@ -305,19 +309,29 @@ const stageLabel = computed(() => {
     audio: "正在合成音频...",
     done: "播客制作完成！",
     cancelled: "已取消制作",
+    error: "制作失败，请查看错误日志",
   };
   return labels[props.productionStage] || "";
 });
 
 function isStepCompleted(stepId: ProductionStage) {
+  if (isCancelled.value || isError.value) {
+    return false;
+  }
   return currentIdx.value > stepsOrder.indexOf(stepId);
 }
 
 function isStepActive(stepId: ProductionStage) {
+  if (isCancelled.value || isError.value) {
+    return false;
+  }
   return currentIdx.value === stepsOrder.indexOf(stepId);
 }
 
 function isStepPending(stepId: ProductionStage) {
+  if (isCancelled.value || isError.value) {
+    return true;
+  }
   return currentIdx.value < stepsOrder.indexOf(stepId);
 }
 </script>
@@ -539,6 +553,11 @@ function isStepPending(stepId: ProductionStage) {
   background: rgba(239, 68, 68, 0.08);
   border-color: rgba(239, 68, 68, 0.15);
   color: #fca5a5;
+}
+.pipeline-status-chip--error {
+  background: rgba(244, 63, 94, 0.08);
+  border-color: rgba(244, 63, 94, 0.18);
+  color: #fda4af;
 }
 
 /* ── Navbar ── */

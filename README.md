@@ -23,17 +23,19 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 <!-- TODO: 替换为实际截图/GIF -->
 <!-- ![产品流程](docs/demo-flow.gif) -->
 
+**当前定位：** DeepCast 目前是面向作品集展示的单用户本地 Demo，重点验证“主题输入 → 深度研究 → 报告 → 播客脚本 → 语音合成”的端到端 Agent 工作流。多用户任务隔离、线上队列、完整埋点和留存分析暂未作为当前版本实现目标，已放入后续产品化路线。
+
 **用户旅程：**
 
 ```
 输入主题 "AI Agent 的发展趋势"
-  → [15s] 规划 3 个研究子任务，检索相关历史记忆
+  → [15s] 规划 3 个研究子任务
   → [45s] 并行搜索（LLM 过滤 + 权威性排序）+ 摘要，实时展示 Agent 动作
   → [60s] 迭代深度搜索：递归反思覆盖情况 → 识别信息缺口 → 补充任务 → 信息饱和终止
   → [90s] 生成报告大纲 → 撰写报告 + Self-Refine（Critic 评估 → 修改）
   → [105s] 生成节目蓝图（Hook/分段/转场/CTA）→ 双人对谈脚本（Host 苏打 + Guest 茉莉，含情感标注）
   → [150s] 导演模式 TTS 逐句语音合成 + 拼接
-  → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告 + 长期记忆持久化
+  → 完成：可播放的播客 MP3 + 可阅读的 Markdown 报告
 ```
 
 ## 竞品对比
@@ -78,7 +80,7 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **问题：** 复杂主题无法一步到位生成高质量内容。
 
-**决策：** 将任务拆解为 5 个专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序）→ WriterAgent（报告撰写 + Self-Refine 精炼）→ ScriptGenerationService（节目蓝图 + 对话脚本）→ AudioGenerationService（TTS 合成）。并行执行提升效率，DirectorAgent 统一协调。
+**决策：** 将任务拆解为专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序 + 摘要）→ WriterAgent（报告撰写 / 修改 / 脚本生成）→ CriticAgent（报告质量评估）→ AudioGenerationService（TTS 合成）。主链路通过 DirectorAgent 注册和分派各 Agent，DeepResearchAgent 负责阶段编排、并发执行和 SSE 输出。
 
 ### 7. 迭代式深度搜索 + 智能终止
 
@@ -92,11 +94,11 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **决策：** 正式写作前先生成结构化报告大纲，明确读者问题、核心主线、章节论点、证据需求和来源风险；报告初稿生成后，Critic Agent 再从逻辑严谨性、数据支撑度、专业性、引用可信度等维度评估质量并给出结构化反馈，Writer Agent 据此修改。形成"大纲 → 初稿 → 批判 → 修改"的质量闭环。
 
-### 9. 混合记忆管理
+### 9. 可选：专题系列记忆复用
 
-**问题：** 每次研究都是独立的，无法利用历史研究发现。
+**问题：** 对单次主题生成 Demo 来说，历史记忆不是主链路刚需；但如果做同一领域的系列节目，复用历史研究发现可以减少重复搜索。
 
-**决策：** 引入 MemoryManager，研究完成后使用 LLM 提取关键发现（实体、关键词、结论）持久化为结构化记忆。下次研究前自动检索相关记忆注入规划 prompt，避免重复搜索已知信息。
+**决策：** 保留 MemoryManager 作为可选扩展，但默认关闭（`ENABLE_MEMORY=False`）。开启后，系统会在研究完成后提取关键发现（实体、关键词、结论）持久化为结构化记忆，并在后续同主题研究前检索相关记忆注入规划 prompt。
 
 ### 6. 导演模式拟人语音（情感化 TTS）
 
@@ -109,7 +111,9 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **效果：** 语音不再是"读稿"，而是"表演"——同一角色在不同语境下有不同的情绪表达，对话中能听到自然的停顿、语气转折和情感流动。
 
-## 核心指标体系
+## 后续产品化指标体系
+
+当前 Demo 暂不内置完整用户行为埋点；以下指标用于后续产品化版本验证体验质量。
 
 **北极星指标：** WAST（Weekly Average Session Time）—— 活跃用户周均收听时长，衡量"是否真正填补了碎片化时间"。
 
@@ -136,9 +140,11 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 | 版本 | 重点 | 状态 |
 |------|------|------|
 | v1.0 | 主题 → 播客 MVP，跑通搜索到合成全流程 | ✅ 已完成 |
-| v1.5 | 迭代深度搜索、报告 Self-Refine、搜索过滤、多智能体架构、记忆管理 | ✅ 已完成 |
+| v1.5 | 迭代深度搜索、报告 Self-Refine、搜索过滤、多智能体架构 | ✅ 已完成 |
 | v2.0 | 支持 URL / PDF / 公众号文章作为输入源 | 规划中 |
+| v2.3 | 专题系列历史记忆复用 | 规划中 |
 | v2.5 | 音色克隆 + 个性化主持人，打造专属"AI 知识伴游" | 规划中 |
+| v3.0 | 多用户任务隔离、任务队列、失败归因和核心指标埋点 | 规划中 |
 
 ---
 
@@ -146,15 +152,17 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 ```
 用户输入主题
-  → MemoryManager → 检索相关历史研究记忆
-  → PlanningService（DeepSeek JSON Output）→ TodoItem[] 任务列表
-  → [并行] SearchService（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
-  → RefinePhase（smart LLM）→ 递归反思覆盖/缺口/来源策略 → 补充搜索（迭代至饱和 + 智能终止）
-  → ReportingService（smart LLM）→ 报告大纲 → 初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
-  → MemoryManager → 提取关键发现持久化
-  → ScriptGenerationService（fast LLM）→ 节目蓝图 JSON → 双人对话 JSON 脚本（含 emotion + audio_tag）
+  → DirectorAgent.dispatch("planner") → TodoItem[] 任务列表
+  → [并行] DirectorAgent.dispatch("researcher") → 混合搜索 + 过滤 + 权威性排序 + 摘要
+  → DirectorAgent.dispatch("planner", analyze/gain) → 递归反思覆盖/缺口/来源策略 → 补充搜索（迭代至饱和 + 智能终止）
+  → DirectorAgent.dispatch("writer") → 报告大纲 + 初稿
+  → DirectorAgent.dispatch("critic") → 报告质量评估
+  → DirectorAgent.dispatch("writer", revise) → 结构化 Markdown 报告
+  → DirectorAgent.dispatch("writer", blueprint/script) → 节目蓝图 JSON → 双人对话 JSON 脚本（含 emotion + audio_tag）
   → AudioGenerationService（MiMo TTS 导演模式 + VoiceDesign）→ PodcastSynthesisService（FFmpeg）→ podcast.mp3
 ```
+
+可选扩展：当 `ENABLE_MEMORY=True` 时，MemoryManager 会在规划前检索历史研究记忆，并在报告完成后保存关键发现，适合专题系列内容复用。
 
 **技术栈：**
 - **智能体编排：** 自研多智能体工作流（DirectorAgent + PlannerAgent/ResearcherAgent/CriticAgent/WriterAgent），基于 OpenAI SDK + DeepSeek JSON Output
@@ -198,7 +206,7 @@ npm run dev                       # 访问 http://localhost:5174
 
 ```bash
 cd backend
-python scripts/verify_ecnu_llm.py       # 验证 LLM 连通性
+python scripts/verify_llm.py            # 验证 LLM 连通性
 python scripts/verify_mimo_tts.py       # 验证 TTS 服务
 python scripts/verify_ffmpeg.py         # 检查 FFmpeg
 python scripts/verify_search.py         # 测试搜索 API
@@ -229,7 +237,7 @@ backend/
       script_generator.py  # 节目蓝图 + 对话脚本生成
       audio_generator.py   # TTS 语音合成（导演模式 + VoiceDesign）
       audio_synthesizer.py # 音频拼接
-      memory_manager.py    # 长期记忆管理（提取、持久化、检索）
+      memory_manager.py    # 可选历史研究记忆（默认关闭，用于专题系列复用）
       llm.py               # LLM 调用封装（JSON 结构化输出）
   scripts/                 # 验证 & 测试脚本
 frontend/

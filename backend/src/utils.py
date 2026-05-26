@@ -28,7 +28,7 @@ def deduplicate_and_format_sources(
     search_response: dict[str, Any] | list[dict[str, Any]],
     max_tokens_per_source: int,
     *,
-    fetch_full_page: bool = False,
+    include_raw_source_content: bool = False,
 ) -> str:
     """
     格式化并去重搜索结果以供下游提示使用。
@@ -36,7 +36,7 @@ def deduplicate_and_format_sources(
     Args:
         search_response: 原始搜索响应（字典或列表）。
         max_tokens_per_source: 每个来源截取的最大 Token 数。
-        fetch_full_page: 是否尝试使用完整页面内容（如果可用）。
+        include_raw_source_content: 是否拼接搜索后端返回的 raw_content；不会主动抓取网页。
         
     Returns:
         格式化后的上下文文本字符串。
@@ -62,7 +62,7 @@ def deduplicate_and_format_sources(
         formatted_parts.append(f"URL: {source.get('url', '')}\n\n")
         formatted_parts.append(f"信息内容: {content}\n\n")
 
-        if fetch_full_page:
+        if include_raw_source_content:
             raw_content = source.get("raw_content")
             if raw_content is None:
                 logger.debug("raw_content missing for %s", source.get("url", ""))

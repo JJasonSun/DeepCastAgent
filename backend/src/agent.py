@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openai import OpenAI
 
@@ -18,13 +18,15 @@ from services.audio_synthesizer import PodcastSynthesisService
 from services.memory_manager import MemoryManager
 from services.note_manager import NoteManager
 from services.planner import PlanningService
-from services.reporter import ReportingService
+from services.reporter import ReportingService, is_report_generation_failure
 from services.script_generator import ScriptGenerationService
-from services.search import dispatch_search, filter_search_results, prepare_research_context, sort_by_authority
 from services.summarizer import SummarizationService
 from services.tool_events import ToolCallTracker
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from agents import DirectorAgent
 
 
 class DeepResearchAgent:
@@ -86,7 +88,7 @@ class DeepResearchAgent:
             max_retries=0,
         )
 
-    def _init_director(self) -> "DirectorAgent":
+    def _init_director(self) -> DirectorAgent:
         """初始化 DirectorAgent 并注册所有专业 Agent。"""
         from agents import (
             CriticAgent,
@@ -129,12 +131,24 @@ class DeepResearchAgent:
         # 检索相关历史记忆
         historical_context = self._retrieve_historical_context(topic)
 
-        state.todo_items = self.planner.plan_todo_list(state, historical_context)
+        plan_result = self.director.dispatch(
+            "planner",
+            {
+                "action": "plan",
+                "state": state,
+                "historical_context": historical_context,
+            },
+        )
+        state.todo_items = plan_result.data.get("tasks", []) if plan_result.success else []
         self._drain_tool_events(state)
 
         if not state.todo_items:
             logger.info("No TODO items generated; falling back to single task")
-            state.todo_items = [self.planner.create_fallback_task(state)]
+            fallback_result = self.director.dispatch(
+                "planner",
+                {"action": "fallback", "state": state},
+            )
+            state.todo_items = [fallback_result.data["task"]] if fallback_result.success else []
 
         for task in state.todo_items:
             for _ in self._execute_task(state, task, emit_stream=False):
@@ -143,7 +157,7 @@ class DeepResearchAgent:
         # 迭代式深度搜索
         self._refine_research(state)
 
-        report = self.reporting.generate_report_with_refine(state)
+        report = self._generate_report_via_agents(state)
         self._drain_tool_events(state)
         state.structured_report = report
         state.running_summary = report
@@ -153,7 +167,11 @@ class DeepResearchAgent:
         if self.memory_manager:
             self.memory_manager.save_research_memory(state)
 
-        script = self.script_generator.generate_script(state)
+        script_result = self.director.dispatch(
+            "writer",
+            {"action": "script", "state": state},
+        )
+        script = script_result.data.get("script", []) if script_result.success else []
         self._drain_tool_events(state)
         state.podcast_script = script
 
@@ -236,13 +254,25 @@ class DeepResearchAgent:
         if self.is_cancelled():
             return
         historical_context = getattr(self, "_historical_context", "")
-        state.todo_items = self.planner.plan_todo_list(state, historical_context)
+        plan_result = self.director.dispatch(
+            "planner",
+            {
+                "action": "plan",
+                "state": state,
+                "historical_context": historical_context,
+            },
+        )
+        state.todo_items = plan_result.data.get("tasks", []) if plan_result.success else []
         if self.is_cancelled():
             return
         for event in self._drain_tool_events(state, step=0):
             yield event
         if not state.todo_items:
-            state.todo_items = [self.planner.create_fallback_task(state)]
+            fallback_result = self.director.dispatch(
+                "planner",
+                {"action": "fallback", "state": state},
+            )
+            state.todo_items = [fallback_result.data["task"]] if fallback_result.success else []
 
         channel_map: dict[int, dict[str, Any]] = {}
         for index, task in enumerate(state.todo_items, start=1):
@@ -375,8 +405,7 @@ class DeepResearchAgent:
         if self.is_cancelled():
             return
 
-        # 使用带精炼的报告生成（流式收集事件）
-        report, refine_events = self.reporting.generate_report_with_refine_stream(state)
+        report, refine_events = self._generate_report_via_agents_stream(state)
 
         if self.is_cancelled():
             return
@@ -430,18 +459,30 @@ class DeepResearchAgent:
             }
             yield {"type": "log", "message": f"[深度搜索] 正在分析已有信息完整性（第 {round_num + 1} 轮）..."}
 
-            should_continue, reason, new_tasks = self.planner.analyze_and_refine(
-                state, round_num, max_rounds,
+            refine_result = self.director.dispatch(
+                "planner",
+                {
+                    "action": "analyze",
+                    "state": state,
+                    "current_round": round_num,
+                    "max_rounds": max_rounds,
+                },
             )
+            refine_data = refine_result.data if refine_result.success else {}
+            should_continue = bool(refine_data.get("should_continue"))
+            reason = str(refine_data.get("reason", "分析失败，停止精炼"))
+            new_tasks = refine_data.get("new_tasks", [])
 
             if not should_continue or not new_tasks:
+                budget_limited = self._is_search_budget_limited_reason(reason)
+                message_prefix = "搜索预算已用完，进入报告阶段" if budget_limited else "信息饱和"
                 yield {
                     "type": "refine_saturation",
                     "round": round_num + 1,
                     "reason": reason,
-                    "message": f"信息饱和: {reason}",
+                    "message": f"{message_prefix}: {reason}",
                 }
-                yield {"type": "log", "message": f"[深度搜索] 信息饱和: {reason}"}
+                yield {"type": "log", "message": f"[深度搜索] {message_prefix}: {reason}"}
                 break
 
             # 将新任务添加到状态中
@@ -563,10 +604,18 @@ class DeepResearchAgent:
                 for thread in threads:
                     thread.join(timeout=1.0)
 
-            # 智能终止：检查信息增益
+            # 智能终止：检查信息重复度
             completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
             if completed_new:
-                gain = self.planner.calculate_information_gain(state, completed_new)
+                gain_result = self.director.dispatch(
+                    "planner",
+                    {
+                        "action": "gain",
+                        "state": state,
+                        "new_tasks": completed_new,
+                    },
+                )
+                gain = float(gain_result.data.get("gain", 1.0)) if gain_result.success else 1.0
                 if gain >= self.config.min_information_gain:
                     yield {
                         "type": "refine_saturation",
@@ -576,6 +625,15 @@ class DeepResearchAgent:
                     }
                     yield {"type": "log", "message": f"[深度搜索] 智能终止: 信息重复度 {gain:.0%}，已无新信息"}
                     break
+            if round_num == max_rounds - 1:
+                budget_reason = "已达到搜索预算上限；如仍存在知识缺口，将在报告中作为待验证问题或局限性呈现。"
+                yield {
+                    "type": "refine_saturation",
+                    "round": round_num + 1,
+                    "reason": budget_reason,
+                    "message": "搜索预算已用完，进入报告阶段",
+                }
+                yield {"type": "log", "message": f"[深度搜索] {budget_reason}"}
 
     def _refine_research(self, state: SummaryState) -> None:
         """同步模式：迭代式深度搜索。"""
@@ -589,12 +647,25 @@ class DeepResearchAgent:
 
             logger.info("Refine research round %d/%d", round_num + 1, max_rounds)
 
-            should_continue, reason, new_tasks = self.planner.analyze_and_refine(
-                state, round_num, max_rounds,
+            refine_result = self.director.dispatch(
+                "planner",
+                {
+                    "action": "analyze",
+                    "state": state,
+                    "current_round": round_num,
+                    "max_rounds": max_rounds,
+                },
             )
+            refine_data = refine_result.data if refine_result.success else {}
+            should_continue = bool(refine_data.get("should_continue"))
+            reason = str(refine_data.get("reason", "分析失败，停止精炼"))
+            new_tasks = refine_data.get("new_tasks", [])
 
             if not should_continue or not new_tasks:
-                logger.info("Information saturation: %s", reason)
+                if self._is_search_budget_limited_reason(reason):
+                    logger.info("Search budget exhausted, entering report phase: %s", reason)
+                else:
+                    logger.info("Information saturation: %s", reason)
                 break
 
             logger.info("Found information gap: %s, executing %d supplement tasks", reason, len(new_tasks))
@@ -604,13 +675,31 @@ class DeepResearchAgent:
                 for _ in self._execute_task(state, task, emit_stream=False):
                     pass
 
-            # 智能终止：检查信息增益
+            # 智能终止：检查信息重复度
             completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
             if completed_new:
-                gain = self.planner.calculate_information_gain(state, completed_new)
+                gain_result = self.director.dispatch(
+                    "planner",
+                    {
+                        "action": "gain",
+                        "state": state,
+                        "new_tasks": completed_new,
+                    },
+                )
+                gain = float(gain_result.data.get("gain", 1.0)) if gain_result.success else 1.0
                 if gain >= self.config.min_information_gain:
-                    logger.info("Smart termination: %.0%% overlap, stopping refine", gain * 100)
+                    logger.info("Smart termination: %.0%% duplicate information, stopping refine", gain * 100)
                     break
+            if round_num == max_rounds - 1:
+                logger.info(
+                    "Search budget exhausted after final refine round; entering report phase with remaining gaps as limitations."
+                )
+
+    @staticmethod
+    def _is_search_budget_limited_reason(reason: str) -> bool:
+        """判断 refine 停止原因是否来自搜索预算限制，而非真正信息饱和。"""
+        budget_keywords = ("最大", "轮次", "预算", "限制", "无法继续", "耗尽", "上限")
+        return any(keyword in reason for keyword in budget_keywords)
 
     def _stream_script_phase(self, state: SummaryState) -> Iterator[dict[str, Any] | int]:
         """
@@ -628,7 +717,11 @@ class DeepResearchAgent:
 
         if self.is_cancelled():
             return
-        blueprint = self.script_generator.generate_blueprint(state)
+        blueprint_result = self.director.dispatch(
+            "writer",
+            {"action": "blueprint", "state": state},
+        )
+        blueprint = blueprint_result.data.get("blueprint") if blueprint_result.success else None
         if blueprint:
             yield {
                 "type": "podcast_blueprint",
@@ -642,11 +735,18 @@ class DeepResearchAgent:
 
         if self.is_cancelled():
             return
-        script = self.script_generator.generate_script(state, blueprint=blueprint)
+        script_result = self.director.dispatch(
+            "writer",
+            {
+                "action": "script",
+                "state": state,
+                "blueprint": blueprint,
+            },
+        )
+        script = script_result.data.get("script", []) if script_result.success else []
         if self.is_cancelled():
             return
-        for event in self._drain_tool_events(state):
-            yield event
+        yield from self._drain_tool_events(state)
         state.podcast_script = script
 
         script_turns = len(script) if script else 0
@@ -661,6 +761,139 @@ class DeepResearchAgent:
             yield {"type": "log", "message": "警告：脚本为空，跳过音频生成"}
 
         return script_turns  # type: ignore[return-value]
+
+    def _generate_report_via_agents(self, state: SummaryState) -> str:
+        """通过 Writer/Critic Agent 生成并精炼报告。"""
+        report_result = self.director.dispatch(
+            "writer",
+            {"action": "report", "state": state},
+        )
+        current_report = report_result.data.get("report", "") if report_result.success else ""
+        if is_report_generation_failure(current_report):
+            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+        if not current_report or self.config.max_report_refine_rounds <= 0:
+            return current_report
+
+        for round_num in range(self.config.max_report_refine_rounds):
+            critique_result = self.director.dispatch(
+                "critic",
+                {"report": current_report, "round": round_num + 1},
+            )
+            if not critique_result.success:
+                logger.warning("CriticAgent failed: %s", critique_result.data)
+                break
+
+            critique = critique_result.data
+            verdict = critique.get("verdict", "pass")
+            score = critique.get("overall_score", 0)
+            logger.info(
+                "CriticAgent round %d: score=%s/10, verdict=%s",
+                round_num + 1, score, verdict,
+            )
+            if verdict == "pass":
+                break
+
+            revise_result = self.director.dispatch(
+                "writer",
+                {
+                    "action": "revise",
+                    "state": state,
+                    "report": current_report,
+                    "critique": critique,
+                },
+            )
+            if not revise_result.success:
+                logger.warning("WriterAgent revise failed: %s", revise_result.data)
+                break
+            revised_report = revise_result.data.get("report", "")
+            if is_report_generation_failure(revised_report):
+                logger.warning("WriterAgent revise returned invalid report placeholder; keeping previous version")
+                break
+            current_report = revised_report
+
+        return current_report
+
+    def _generate_report_via_agents_stream(
+        self,
+        state: SummaryState,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """通过 Writer/Critic Agent 生成报告，并返回精炼过程事件。"""
+        events: list[dict[str, Any]] = []
+        report_result = self.director.dispatch(
+            "writer",
+            {"action": "report", "state": state},
+        )
+        current_report = report_result.data.get("report", "") if report_result.success else ""
+        if is_report_generation_failure(current_report):
+            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+        events.append({"type": "log", "message": f"报告初稿生成完成，共 {len(current_report)} 字符"})
+
+        if not current_report or self.config.max_report_refine_rounds <= 0:
+            return current_report, events
+
+        for round_num in range(self.config.max_report_refine_rounds):
+            events.append({
+                "type": "report_refine",
+                "round": round_num + 1,
+                "max_rounds": self.config.max_report_refine_rounds,
+                "phase": "critique",
+                "message": f"CriticAgent 正在评估报告质量（第 {round_num + 1} 轮）...",
+            })
+
+            critique_result = self.director.dispatch(
+                "critic",
+                {"report": current_report, "round": round_num + 1},
+            )
+            if not critique_result.success:
+                events.append({"type": "log", "message": "CriticAgent 评估失败，停止报告精炼"})
+                break
+
+            critique = critique_result.data
+            verdict = critique.get("verdict", "pass")
+            score = critique.get("overall_score", 0)
+            issues = critique.get("issues", [])
+            events.append({
+                "type": "report_refine",
+                "round": round_num + 1,
+                "max_rounds": self.config.max_report_refine_rounds,
+                "phase": "result",
+                "score": score,
+                "verdict": verdict,
+                "issue_count": len(issues),
+                "message": f"CriticAgent 评分 {score}/10，发现 {len(issues)} 个问题，判定: {verdict}",
+            })
+
+            if verdict == "pass":
+                events.append({"type": "log", "message": f"报告质量达标（{score}/10），无需修改"})
+                break
+
+            events.append({
+                "type": "log",
+                "message": f"WriterAgent 根据审稿意见修改报告（{len(issues)} 个问题）...",
+            })
+            revise_result = self.director.dispatch(
+                "writer",
+                {
+                    "action": "revise",
+                    "state": state,
+                    "report": current_report,
+                    "critique": critique,
+                },
+            )
+            if not revise_result.success:
+                events.append({"type": "log", "message": "WriterAgent 修改失败，保留上一版本"})
+                break
+            revised_report = revise_result.data.get("report", "")
+            if is_report_generation_failure(revised_report):
+                events.append({"type": "log", "message": "WriterAgent 修改返回失败占位，保留上一版本"})
+                break
+            current_report = revised_report
+            events.append({
+                "type": "log",
+                "message": f"报告修改完成，当前 {len(current_report)} 字符",
+            })
+
+        return current_report, events
 
     def _stream_audio_phase(self, state: SummaryState, script_turns: int) -> Iterator[dict[str, Any]]:
         """Phase 4: TTS 音频生成 + FFmpeg 合成。"""
@@ -789,9 +1022,7 @@ class DeepResearchAgent:
         emit_stream: bool,
         step: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """
-        对单个任务运行搜索 + 总结逻辑。
-        """
+        """对单个任务运行搜索 + 总结逻辑。"""
         task.status = "in_progress"
 
         # 透明化：展示搜索查询
@@ -804,10 +1035,18 @@ class DeepResearchAgent:
                 "step": step,
             }
 
-        search_result, notices, backend = dispatch_search(
-            task.query,
-            self.config,
+        search_agent_result = self.director.dispatch(
+            "researcher",
+            {
+                "action": "search",
+                "state": state,
+                "task": task,
+            },
         )
+        search_data = search_agent_result.data if search_agent_result.success else {}
+        search_result = search_data.get("search_payload")
+        notices = search_data.get("notices", [])
+        backend = search_data.get("backend", self.config.search_api.value)
         task.notices = notices
 
         if emit_stream:
@@ -848,33 +1087,8 @@ class DeepResearchAgent:
             if not emit_stream:
                 self._drain_tool_events(state)
 
-        # 搜索结果质量评估：过滤低价值内容
-        if self.config.enable_search_filter and search_result and search_result.get("results"):
-            original_count = len(search_result["results"])
-            filtered_results = filter_search_results(
-                search_result["results"],
-                state.research_topic or task.query,
-                self._client,
-                self.config,
-            )
-            if len(filtered_results) < original_count:
-                search_result["results"] = filtered_results
-                if emit_stream:
-                    yield {
-                        "type": "log",
-                        "message": f"[FILTER] 搜索结果过滤: {original_count} → {len(filtered_results)} 条",
-                        "task_id": task.id,
-                        "step": step,
-                    }
-
-        # 信息源可信度分层：按域名权威性排序
-        if search_result and search_result.get("results"):
-            search_result["results"] = sort_by_authority(search_result["results"])
-
-        sources_summary, context = prepare_research_context(
-            search_result,
-            self.config,
-        )
+        sources_summary = str(search_data.get("sources_summary", ""))
+        context = str(search_data.get("research_context", ""))
 
         task.sources_summary = sources_summary
 
@@ -900,7 +1114,24 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
             }
 
-            summary_stream, summary_getter = self.summarizer.stream_task_summary(state, task, context)
+            summary_result = self.director.dispatch(
+                "researcher",
+                {
+                    "action": "summarize_stream",
+                    "state": state,
+                    "task": task,
+                    "research_context": context,
+                },
+            )
+            if not summary_result.success:
+                summary_text = "暂无可用信息"
+                summary_stream = iter(())
+
+                def summary_getter() -> str:
+                    return summary_text
+            else:
+                summary_stream = summary_result.data["summary_stream"]
+                summary_getter = summary_result.data["summary_getter"]
             try:
                 for event in self._drain_tool_events(state, step=step):
                     yield event
@@ -918,7 +1149,16 @@ class DeepResearchAgent:
             finally:
                 summary_text = summary_getter()
         else:
-            summary_text = self.summarizer.summarize_task(state, task, context)
+            summary_result = self.director.dispatch(
+                "researcher",
+                {
+                    "action": "summarize",
+                    "state": state,
+                    "task": task,
+                    "research_context": context,
+                },
+            )
+            summary_text = summary_result.data.get("summary", "") if summary_result.success else ""
             self._drain_tool_events(state)
 
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"

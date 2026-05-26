@@ -19,6 +19,22 @@ from services.text_processing import strip_tool_calls
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
+REPORT_GENERATION_FAILURE_MESSAGE = "报告生成失败，请检查输入。"
+
+
+def is_report_generation_failure(report: str | None) -> bool:
+    """判断文本是否是报告生成失败占位，而非真实研究报告。"""
+    if not report or not report.strip():
+        return True
+    normalized = report.strip()
+    if normalized == REPORT_GENERATION_FAILURE_MESSAGE:
+        return True
+    head = normalized[:800]
+    return (
+        "关于“AI 报告生成失败”的分析与改进报告" in head
+        or "关于\"AI 报告生成失败\"的分析与改进报告" in head
+        or "原报告生成任务因输入信息缺失或指令冲突" in head
+    )
 
 # 报告大纲与审稿输出的 JSON Schema
 REPORT_OUTLINE_JSON_SCHEMA: dict[str, Any] = {
@@ -172,6 +188,7 @@ class ReportingService:
             reasoning_effort=reasoning_effort,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
         )
 
         report_text = response.strip()
@@ -180,7 +197,9 @@ class ReportingService:
 
         report_text = strip_tool_calls(report_text).strip()
 
-        return report_text or "报告生成失败，请检查输入。"
+        if not report_text:
+            logger.error("Report generation returned empty text.")
+        return report_text
 
     def _build_tasks_context(self, state: SummaryState) -> str:
         """构建报告写作所需的任务上下文。"""
@@ -225,6 +244,7 @@ class ReportingService:
             reasoning_effort=reasoning_effort,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
         )
 
         if isinstance(result, dict):
@@ -265,6 +285,9 @@ class ReportingService:
         """生成报告并通过批判-修改循环精炼质量。"""
         # Step 1: 生成初稿
         draft = self.generate_report(state)
+        if is_report_generation_failure(draft):
+            logger.error("Report draft is empty or failure placeholder; skipping refinement.")
+            return ""
 
         if self._config.max_report_refine_rounds <= 0:
             return draft
@@ -290,10 +313,10 @@ class ReportingService:
 
             # 2b: Writer 修改
             revised = self._refine_report(current_report, critique)
-            if revised:
+            if revised and not is_report_generation_failure(revised):
                 current_report = revised
             else:
-                logger.warning("Report refinement returned empty, keeping previous version")
+                logger.warning("Report refinement returned empty or failure placeholder, keeping previous version")
                 break
 
         return current_report
@@ -311,6 +334,9 @@ class ReportingService:
 
         # Step 1: 生成初稿
         draft = self.generate_report(state)
+        if is_report_generation_failure(draft):
+            events.append({"type": "log", "message": "报告初稿生成失败，停止报告精炼"})
+            return "", events
         events.append({"type": "log", "message": f"报告初稿生成完成，共 {len(draft)} 字符"})
 
         if self._config.max_report_refine_rounds <= 0:
@@ -357,14 +383,14 @@ class ReportingService:
             })
 
             revised = self._refine_report(current_report, critique)
-            if revised:
+            if revised and not is_report_generation_failure(revised):
                 current_report = revised
                 events.append({
                     "type": "log",
                     "message": f"报告修改完成，当前 {len(current_report)} 字符",
                 })
             else:
-                events.append({"type": "log", "message": "报告修改返回空，保留上一版本"})
+                events.append({"type": "log", "message": "报告修改返回空或失败占位，保留上一版本"})
                 break
 
         return current_report, events
@@ -389,6 +415,7 @@ class ReportingService:
             reasoning_effort=reasoning_effort,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
         )
 
         if isinstance(result, dict):
@@ -397,6 +424,10 @@ class ReportingService:
 
     def _refine_report(self, report: str, critique: dict[str, Any]) -> str:
         """根据审稿意见修改报告。"""
+        if is_report_generation_failure(report):
+            logger.error("Refusing to refine invalid report placeholder.")
+            return ""
+
         issues = critique.get("issues", [])
         if not issues:
             return report
@@ -433,6 +464,7 @@ class ReportingService:
             reasoning_effort=reasoning_effort,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
         )
 
         refined_text = response.strip()

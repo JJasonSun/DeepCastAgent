@@ -19,6 +19,7 @@ from prompts import (
 from services.llm import call_llm_json
 
 logger = logging.getLogger(__name__)
+MAX_REFINE_TASKS = 3
 
 # 规划器输出的 JSON Schema（用于 DeepSeek JSON Output 提示与本地解析）
 PLANNER_JSON_SCHEMA: dict[str, Any] = {
@@ -150,6 +151,7 @@ class PlanningService:
             extra_body=extra_body,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
         )
 
         # 结构化输出保证 JSON 格式正确，直接提取 tasks 数组
@@ -210,6 +212,8 @@ class PlanningService:
             research_topic=state.research_topic,
             current_round=current_round + 1,
             max_rounds=max_rounds,
+            can_search_this_round="是" if current_round < max_rounds else "否",
+            remaining_search_rounds=max(max_rounds - current_round - 1, 0),
             existing_summaries=existing_summaries,
             previous_queries=previous_queries,
         )
@@ -227,6 +231,8 @@ class PlanningService:
             reasoning_effort=reasoning_effort,
             max_retries=self._config.llm_max_retries,
             retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=self._config.llm_long_timeout,
+            response_transform=self._normalize_refine_result,
         )
 
         if not result or not isinstance(result, dict):
@@ -273,11 +279,26 @@ class PlanningService:
         return should_continue, reason, new_tasks
 
     @staticmethod
+    def _normalize_refine_result(payload: Any) -> Any:
+        """容忍模型多生成补充任务，只保留前 3 个进入 schema 校验。"""
+        if not isinstance(payload, dict):
+            return payload
+        tasks = payload.get("tasks")
+        if isinstance(tasks, list) and len(tasks) > MAX_REFINE_TASKS:
+            logger.warning(
+                "Refine analysis returned %d tasks; truncating to %d.",
+                len(tasks),
+                MAX_REFINE_TASKS,
+            )
+            payload = {**payload, "tasks": tasks[:MAX_REFINE_TASKS]}
+        return payload
+
+    @staticmethod
     def calculate_information_gain(
         state: SummaryState,
         new_tasks: list[TodoItem],
     ) -> float:
-        """计算本轮新增信息的增益比例（0-1）。
+        """计算本轮新增信息与已有信息的重复度（0-1）。
 
         基于新任务 summary 与已有信息的关键词重叠度。
         返回值越高表示重复越多（信息增益越低）。

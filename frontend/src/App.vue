@@ -150,6 +150,7 @@ async function startProduction() {
     } else {
       addLog(`❌ 错误: ${err.message || err}`);
       console.error(err);
+      productionStage.value = "error";
       cancelResearch().catch(() => {});
     }
   } finally {
@@ -164,19 +165,20 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "client_retry") {
-    addLog(`🔁 [RETRY] ${(event as any).message || "连接波动，正在重试"}`);
+    addLog(`🔁 [RETRY] ${event.message || "连接波动，正在重试"}`);
     return;
   }
 
   if (event.type === "error") {
-    const detail = String((event as any).detail || (event as any).message || "后端任务失败");
+    const detail = String(event.detail || event.message || "后端任务失败");
     addLog(`❌ [ERROR] ${detail}`);
     stopWaitingAnimation();
+    productionStage.value = "error";
     return;
   }
 
   if (event.type === "log") {
-    const msg = String((event as any).message || "");
+    const msg = String(event.message || "");
     const cleanMsg = msg.replace(/\u001b\[\d+m/g, "");
     addLog(`INFO: ${cleanMsg}`);
 
@@ -189,9 +191,8 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "stage_change") {
-    const payload = event as any;
-    const stage = payload.stage;
-    const message = payload.message || "";
+    const stage = event.stage;
+    const message = event.message || "";
 
     addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     addLog(`📌 [STAGE] ${stage.toUpperCase()} - ${message}`);
@@ -213,50 +214,44 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "tool_call") {
-    const p = event as any;
-    addLog(`🔧 [TOOL] ${p.tool} - ${p.agent || "Agent"}`);
+    addLog(`🔧 [TOOL] ${event.tool || "unknown"} - ${event.agent || "Agent"}`);
   }
 
   if (event.type === "todo_list") {
-    const p = event as any;
-    const tasks = p.tasks || [];
+    const tasks = event.tasks || [];
     taskProgress.total = tasks.length;
     taskProgress.completed = 0;
   }
 
   if (event.type === "task_status") {
-    const p = event as any;
-    if (p.status === "completed") {
+    if (event.status === "completed") {
       taskProgress.completed++;
       if (taskProgress.total > 0) {
         progressPercent.value = Math.round((taskProgress.completed / taskProgress.total) * 40);
       }
-      addLog(`✅ [TASK ${p.task_id}] ${p.title}`);
-    } else if (p.status === "in_progress") {
-      addLog(`🚀 [TASK ${p.task_id}] ${p.title} (In Progress)`);
-    } else if (p.status === "failed") {
-      addLog(`❌ [TASK ${p.task_id}] Failed: ${p.title}`);
+      addLog(`✅ [TASK ${event.task_id}] ${event.title || "未命名任务"}`);
+    } else if (event.status === "in_progress") {
+      addLog(`🚀 [TASK ${event.task_id}] ${event.title || "未命名任务"} (In Progress)`);
+    } else if (event.status === "failed") {
+      addLog(`❌ [TASK ${event.task_id}] Failed: ${event.title || "未命名任务"}`);
     }
   }
 
   if (event.type === "search_query") {
-    const p = event as any;
-    addLog(`🔎 [SEARCH] 正在搜索: "${p.query}"`);
+    addLog(`🔎 [SEARCH] 正在搜索: "${event.query}"`);
   }
 
   if (event.type === "sources") {
-    const p = event as any;
-    const count = p.result_count;
+    const count = event.result_count;
     if (count !== undefined) {
       addLog(`📊 [SEARCH] 获取到 ${count} 条搜索结果`);
     }
   }
 
   if (event.type === "task_findings") {
-    const p = event as any;
-    const findings = p.findings || [];
+    const findings = event.findings || [];
     if (findings.length > 0) {
-      addLog(`💡 [FINDINGS] ${p.title} 关键发现:`);
+      addLog(`💡 [FINDINGS] ${event.title || "任务"} 关键发现:`);
       for (const finding of findings) {
         addLog(`   · ${finding}`);
       }
@@ -264,35 +259,31 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "refine_round") {
-    const p = event as any;
-    addLog(`🔍 [DEEP SEARCH] ${p.message || `深度搜索分析第 ${p.round}/${p.max_rounds} 轮...`}`);
+    addLog(`🔍 [DEEP SEARCH] ${event.message || `深度搜索分析第 ${event.round}/${event.max_rounds} 轮...`}`);
   }
 
   if (event.type === "refine_saturation") {
-    const p = event as any;
-    addLog(`✅ [DEEP SEARCH] ${p.message || `信息饱和: ${p.reason}`}`);
+    addLog(`✅ [DEEP SEARCH] ${event.message || `信息饱和: ${event.reason || "无新增信息"}`}`);
   }
 
   if (event.type === "report_refine") {
-    const p = event as any;
-    if (p.phase === "critique") {
-      addLog(`🔍 [REPORT] ${p.message}`);
-    } else if (p.phase === "result") {
-      const icon = p.verdict === "pass" ? "✅" : "🔄";
-      addLog(`${icon} [REPORT] ${p.message}`);
+    if (event.phase === "critique") {
+      addLog(`🔍 [REPORT] ${event.message || "正在评估报告质量"}`);
+    } else if (event.phase === "result") {
+      const icon = event.verdict === "pass" ? "✅" : "🔄";
+      addLog(`${icon} [REPORT] ${event.message || "报告评估完成"}`);
     }
   }
 
   if (event.type === "podcast_blueprint") {
-    const p = event as any;
-    podcastBlueprint.value = (p.blueprint || null) as PodcastBlueprint | null;
+    podcastBlueprint.value = (event.blueprint || null) as PodcastBlueprint | null;
     const title = podcastBlueprint.value?.title || "未命名节目";
-    const sectionCount = podcastBlueprint.value?.sections?.length || p.section_count || 0;
+    const sectionCount = podcastBlueprint.value?.sections?.length || event.section_count || 0;
     addLog(`🧩 [BLUEPRINT] 节目蓝图已生成: ${title}（${sectionCount} 个段落）`);
   }
 
   if (event.type === "final_report") {
-    reportMarkdown.value = String((event as any).report);
+    reportMarkdown.value = String(event.report);
     reportReady.value = true;
     addLog("📄 [REPORT] 报告已生成");
   }
@@ -303,23 +294,20 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "audio_start") {
-    const p = event as any;
-    audioProgress.total = p.total || 0;
+    audioProgress.total = event.total || 0;
     addLog(`🎵 [AUDIO] 开始生成音频, 共 ${audioProgress.total} 段`);
   }
 
   if (event.type === "audio_progress") {
-    const p = event as any;
-    audioProgress.current = p.current;
-    audioProgress.total = p.total;
-    if (p.total > 0) {
-      progressPercent.value = 70 + Math.round((p.current / p.total) * 25);
+    audioProgress.current = event.current;
+    audioProgress.total = event.total;
+    if (event.total > 0) {
+      progressPercent.value = 70 + Math.round((event.current / event.total) * 25);
     }
   }
 
   if (event.type === "podcast_ready") {
-    const p = event as any;
-    const filename = String(p.file).split(/[\\/]/).pop();
+    const filename = String(event.file).split(/[\\/]/).pop();
     if (filename) {
       audioUrl.value = `${apiBaseUrl}/output/audio/${filename}`;
       podcastReady.value = true;
@@ -331,7 +319,7 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "cancelled") {
-    const msg = (event as any).message || "研究任务已取消";
+    const msg = event.message || "研究任务已取消";
     addLog(`🛑 [CANCELLED] ${msg}`);
     stopWaitingAnimation();
     productionStage.value = "cancelled";
@@ -367,14 +355,14 @@ function cancelProduction() {
   if (confirm("确定要取消制作吗？")) {
     addLog("🛑 用户请求取消制作...");
 
-    // 1. 立即中断 SSE 连接 — 后端 monitor_disconnect 会自动检测并设置 cancel_event
+    // 1. 先显式通知后端取消，减少仅依赖断连检测的延迟
+    cancelResearch().catch(() => {});
+
+    // 2. 再中断 SSE 连接 — 后端 monitor_disconnect 仍作为后备
     if (abortController) {
       abortController.abort();
       abortController = null;
     }
-
-    // 2. 显式调用 cancel API 作为后备（防止 disconnect 检测延迟）
-    cancelResearch().catch(() => {});
 
     stopWaitingAnimation();
     productionStage.value = "cancelled";

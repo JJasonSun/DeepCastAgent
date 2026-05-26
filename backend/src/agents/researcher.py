@@ -10,9 +10,9 @@ from models import SummaryState, TodoItem
 from services.search import (
     dispatch_search,
     filter_search_results,
-    prepare_research_context,
     sort_by_authority,
 )
+from services.search import prepare_research_context
 from services.summarizer import SummarizationService
 
 
@@ -21,6 +21,8 @@ class ResearcherAgent(BaseAgent):
 
     能力：
     - search: 执行搜索并返回结果
+    - summarize: 基于已构建上下文生成摘要
+    - summarize_stream: 流式生成摘要
     - research: 完整研究流程（搜索 + 过滤 + 排序 + 摘要）
     """
 
@@ -40,7 +42,7 @@ class ResearcherAgent(BaseAgent):
 
     @property
     def capabilities(self) -> list[str]:
-        return ["search", "research", "filter"]
+        return ["search", "research", "filter", "summarize", "summarize_stream"]
 
     def execute(self, context: dict[str, Any]) -> AgentResult:
         action = context.get("action", "research")
@@ -49,6 +51,10 @@ class ResearcherAgent(BaseAgent):
 
         if action == "search":
             return self._search(context, state, task)
+        elif action == "summarize":
+            return self._summarize(context, state, task)
+        elif action == "summarize_stream":
+            return self._summarize_stream(context, state, task)
         elif action == "research":
             return self._full_research(context, state, task)
         else:
@@ -73,10 +79,46 @@ class ResearcherAgent(BaseAgent):
         # 权威性排序
         results = sort_by_authority(results)
 
+        search_payload = {"results": results, "backend": backend}
+        sources_summary, research_context = prepare_research_context(search_payload, self._config)
+
         return AgentResult(
             success=True,
-            data={"results": results, "backend": backend, "notices": notices},
+            data={
+                "results": results,
+                "backend": backend,
+                "notices": notices,
+                "search_payload": search_payload,
+                "sources_summary": sources_summary,
+                "research_context": research_context,
+            },
             metrics={"result_count": len(results)},
+        )
+
+    def _summarize(
+        self, context: dict[str, Any], state: SummaryState, task: TodoItem,
+    ) -> AgentResult:
+        research_context = str(context.get("research_context") or "")
+        summary = self._summarizer.summarize_task(state, task, research_context)
+        return AgentResult(
+            success=bool(summary),
+            data={"summary": summary},
+            metrics={"summary_length": len(summary) if summary else 0},
+        )
+
+    def _summarize_stream(
+        self, context: dict[str, Any], state: SummaryState, task: TodoItem,
+    ) -> AgentResult:
+        research_context = str(context.get("research_context") or "")
+        summary_stream, summary_getter = self._summarizer.stream_task_summary(
+            state, task, research_context,
+        )
+        return AgentResult(
+            success=True,
+            data={
+                "summary_stream": summary_stream,
+                "summary_getter": summary_getter,
+            },
         )
 
     def _full_research(
@@ -90,9 +132,8 @@ class ResearcherAgent(BaseAgent):
 
         results = search_result.data["results"]
 
-        # 构建研究上下文
-        search_payload = {"results": results, "backend": search_result.data.get("backend", "")}
-        sources_summary, research_context = prepare_research_context(search_payload, self._config)
+        sources_summary = search_result.data["sources_summary"]
+        research_context = search_result.data["research_context"]
 
         # 摘要
         summary = self._summarizer.summarize_task(state, task, research_context)

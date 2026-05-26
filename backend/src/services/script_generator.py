@@ -13,6 +13,7 @@ from prompts import script_blueprint_instructions, script_writer_instructions
 from services.llm import call_llm_json
 
 logger = logging.getLogger(__name__)
+MAX_BLUEPRINT_SECTIONS = 3
 
 # 播客节目蓝图的 JSON Schema
 SCRIPT_BLUEPRINT_JSON_SCHEMA = {
@@ -209,6 +210,8 @@ class ScriptGenerationService:
                 extra_body=self._config.build_thinking_body(enable=False),
                 max_retries=self._config.llm_max_retries,
                 retry_base_delay=self._config.llm_retry_base_delay,
+                timeout=self._config.llm_long_timeout,
+                response_transform=self._normalize_blueprint,
             )
 
             if not result:
@@ -269,6 +272,7 @@ class ScriptGenerationService:
                 extra_body=self._config.build_thinking_body(enable=False),
                 max_retries=self._config.llm_max_retries,
                 retry_base_delay=self._config.llm_retry_base_delay,
+                timeout=self._config.llm_long_timeout,
             )
             if isinstance(result, dict):
                 logger.info(
@@ -279,6 +283,21 @@ class ScriptGenerationService:
         except Exception as e:
             logger.warning("Podcast blueprint generation failed; falling back to direct script generation: %s", e)
         return None
+
+    @staticmethod
+    def _normalize_blueprint(payload: object) -> object:
+        """容忍模型多生成节目段落，只保留前 3 段进入 schema 校验。"""
+        if not isinstance(payload, dict):
+            return payload
+        sections = payload.get("sections")
+        if isinstance(sections, list) and len(sections) > MAX_BLUEPRINT_SECTIONS:
+            logger.warning(
+                "Podcast blueprint returned %d sections; truncating to %d.",
+                len(sections),
+                MAX_BLUEPRINT_SECTIONS,
+            )
+            payload = {**payload, "sections": sections[:MAX_BLUEPRINT_SECTIONS]}
+        return payload
 
     @staticmethod
     def _extract_turns(payload: dict | list) -> list | None:
