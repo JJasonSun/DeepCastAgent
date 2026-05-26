@@ -4,12 +4,113 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator
 from typing import Any
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 
 logger = logging.getLogger(__name__)
+
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def is_retryable_api_error(exc: Exception) -> bool:
+    """判断 OpenAI 兼容 API 异常是否适合重试。"""
+    if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in RETRYABLE_STATUS_CODES or exc.status_code >= 500
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code in RETRYABLE_STATUS_CODES or status_code >= 500
+    exc_name = exc.__class__.__name__.lower()
+    if any(token in exc_name for token in ("connection", "connect", "timeout", "temporarily")):
+        return True
+    return False
+
+
+def run_with_retry(
+    operation: Callable[[], Any],
+    *,
+    operation_name: str,
+    max_retries: int = 3,
+    retry_base_delay: float = 1.0,
+) -> Any:
+    """对网络/API 临时失败执行指数退避重试。"""
+    attempts = max(0, max_retries) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt >= attempts or not is_retryable_api_error(exc):
+                raise
+            delay = min(max(retry_base_delay, 0.1) * (2 ** (attempt - 1)), 12.0)
+            logger.warning(
+                "%s failed (%s), retrying %d/%d in %.1fs",
+                operation_name,
+                exc.__class__.__name__,
+                attempt,
+                max_retries,
+                delay,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(f"{operation_name} failed unexpectedly")
+
+
+def _compact_request_args(args: dict[str, Any]) -> dict[str, Any]:
+    """移除 None 参数，避免 OpenAI 兼容服务收到无意义字段。"""
+    return {key: value for key, value in args.items() if value is not None}
+
+
+def _build_json_example(schema: dict[str, Any]) -> Any:
+    """根据 JSON Schema 生成最小示例，用于 JSON Output 提示。"""
+    schema_type = schema.get("type")
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        return _build_json_example(schema["anyOf"][0])
+    if "enum" in schema and isinstance(schema["enum"], list):
+        return schema["enum"][0] if schema["enum"] else ""
+    if schema_type == "object":
+        properties = schema.get("properties", {}) or {}
+        required = schema.get("required", []) or []
+        keys = required if required else list(properties.keys())
+        return {key: _build_json_example(properties.get(key, {})) for key in keys}
+    if schema_type == "array":
+        items = schema.get("items", {}) or {}
+        return [_build_json_example(items)]
+    if schema_type == "integer":
+        return 0
+    if schema_type == "number":
+        return 0.0
+    if schema_type == "boolean":
+        return False
+    if schema_type == "string":
+        return "string"
+    return ""
+
+
+def build_json_mode_instructions(json_schema: dict[str, Any]) -> str:
+    """生成 JSON Output 模式的提示文案（包含 json 关键词与示例）。"""
+    example = _build_json_example(json_schema)
+    example_text = json.dumps(example, ensure_ascii=False, indent=2)
+    return (
+        "请严格输出 JSON（json）对象，仅返回 JSON，不要附加解释或代码块。\n"
+        "Example JSON Output:\n"
+        f"{example_text}\n"
+        "确保输出是可被 json.loads 解析的合法 JSON。"
+    )
+
+
+def _is_thinking_enabled(extra_body: dict[str, Any] | None) -> bool:
+    """判断当前请求是否启用了 DeepSeek thinking mode。"""
+    if not isinstance(extra_body, dict):
+        return False
+    thinking = extra_body.get("thinking")
+    return isinstance(thinking, dict) and thinking.get("type") == "enabled"
 
 
 def call_llm(
@@ -19,16 +120,37 @@ def call_llm(
     model: str,
     temperature: float = 0.0,
     max_tokens: int = 4096,
+    extra_body: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    max_retries: int = 3,
+    retry_base_delay: float = 1.0,
 ) -> str:
     """同步调用 LLM 并返回完整文本。"""
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    request_args: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        max_tokens=max_tokens,
+        "max_tokens": max_tokens,
+        "extra_body": extra_body,
+        "reasoning_effort": reasoning_effort,
+    }
+    if not _is_thinking_enabled(extra_body):
+        request_args["temperature"] = temperature
+    if tools is not None:
+        request_args["tools"] = tools
+    if tool_choice is not None:
+        request_args["tool_choice"] = tool_choice
+
+    request_args = _compact_request_args(request_args)
+    response = run_with_retry(
+        lambda: client.chat.completions.create(**request_args),
+        operation_name=f"LLM completion ({model})",
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
     )
     return response.choices[0].message.content or ""
 
@@ -42,26 +164,34 @@ def call_llm_json(
     schema_name: str = "output",
     temperature: float = 0.0,
     max_tokens: int = 4096,
+    extra_body: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
+    max_retries: int = 3,
+    retry_base_delay: float = 1.0,
 ) -> dict[str, Any] | list | None:
-    """使用结构化输出调用 LLM，返回解析后的 JSON 对象。
-
-    基于 XGrammar 约束解码，保证输出 100% 符合给定 schema。
-    """
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    """使用 DeepSeek JSON Output 调用 LLM，返回解析后的 JSON 对象。"""
+    json_mode_hint = build_json_mode_instructions(json_schema)
+    system_prompt = f"{system_prompt.strip()}\n\n{json_mode_hint}"
+    request_args: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "schema": json_schema,
-            },
-        },
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "extra_body": extra_body,
+        "reasoning_effort": reasoning_effort,
+    }
+    if not _is_thinking_enabled(extra_body):
+        request_args["temperature"] = temperature
+
+    request_args = _compact_request_args(request_args)
+    response = run_with_retry(
+        lambda: client.chat.completions.create(**request_args),
+        operation_name=f"LLM JSON completion ({model})",
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
     )
     content = response.choices[0].message.content
     if not content:
@@ -80,17 +210,38 @@ def stream_llm(
     model: str,
     temperature: float = 0.0,
     max_tokens: int = 4096,
+    extra_body: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    max_retries: int = 3,
+    retry_base_delay: float = 1.0,
 ) -> Generator[str, None, None]:
     """流式调用 LLM，逐块 yield 文本片段。"""
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[
+    request_args: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True,
+        "max_tokens": max_tokens,
+        "stream": True,
+        "extra_body": extra_body,
+        "reasoning_effort": reasoning_effort,
+    }
+    if not _is_thinking_enabled(extra_body):
+        request_args["temperature"] = temperature
+    if tools is not None:
+        request_args["tools"] = tools
+    if tool_choice is not None:
+        request_args["tool_choice"] = tool_choice
+
+    request_args = _compact_request_args(request_args)
+    stream = run_with_retry(
+        lambda: client.chat.completions.create(**request_args),
+        operation_name=f"LLM stream ({model})",
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
     )
     for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None

@@ -10,7 +10,7 @@ from openai import OpenAI
 
 from config import Configuration
 from prompts import search_result_filter_instructions
-from services.llm import call_llm_json
+from services.llm import call_llm_json, run_with_retry
 from utils import (
     deduplicate_and_format_sources,
     format_sources,
@@ -45,10 +45,15 @@ def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> l
     if client is None:
         return []
     try:
-        response = client.search(
-            query=query,
-            max_results=max_results,
-            include_raw_content=False,
+        response = run_with_retry(
+            lambda: client.search(
+                query=query,
+                max_results=max_results,
+                include_raw_content=False,
+            ),
+            operation_name="Tavily search",
+            max_retries=config.search_max_retries,
+            retry_base_delay=config.llm_retry_base_delay,
         )
         results = []
         for item in response.get("results", []):
@@ -74,7 +79,12 @@ def _serpapi_search(query: str, config: Configuration, max_results: int = 5) -> 
             "api_key": config.serpapi_api_key,
             "num": max_results,
         })
-        response = search.get_dict()
+        response = run_with_retry(
+            search.get_dict,
+            operation_name="SerpApi search",
+            max_retries=config.search_max_retries,
+            retry_base_delay=config.llm_retry_base_delay,
+        )
         results = []
         for item in response.get("organic_results", []):
             results.append({
@@ -110,13 +120,12 @@ def _hybrid_search(query: str, config: Configuration, max_results: int = 5) -> l
 def dispatch_search(
     query: str,
     config: Configuration,
-    loop_count: int,
-) -> tuple[dict[str, Any] | None, list[str], str | None, str]:
+) -> tuple[dict[str, Any] | None, list[str], str]:
     """
     执行配置的搜索后端并标准化响应负载。
 
     Returns:
-        元组 (原始负载, 通知列表, 答案文本, 后端标签)。
+        元组 (原始负载, 通知列表, 后端标签)。
     """
     search_api = get_config_value(config.search_api)
     notices: list[str] = []
@@ -151,7 +160,7 @@ def dispatch_search(
         len(results),
     )
 
-    return payload, notices, None, backend_label
+    return payload, notices, backend_label
 
 
 def prepare_research_context(
@@ -227,14 +236,18 @@ def filter_search_results(
         research_topic=research_topic,
         search_results="\n\n".join(results_text),
     )
+    extra_body = config.build_thinking_body(enable=False)
 
     filter_result = call_llm_json(
         client=client,
         system_prompt="你是一名信息筛选专家。",
         user_prompt=prompt,
-        model=config.fast_llm_model,
+        model=config.active_llm_model(),
         json_schema=FILTER_JSON_SCHEMA,
         schema_name="search_filter",
+        extra_body=extra_body,
+        max_retries=config.llm_max_retries,
+        retry_base_delay=config.llm_retry_base_delay,
     )
 
     if not filter_result or not isinstance(filter_result, dict):

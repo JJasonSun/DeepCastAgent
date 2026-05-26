@@ -37,6 +37,57 @@
             ></textarea>
           </div>
 
+          <!-- Model controls -->
+          <div class="setup-controls mb-5">
+            <div class="setup-control-row">
+              <div>
+                <label class="setup-control-label">模型</label>
+              </div>
+              <div class="setup-segmented" role="radiogroup" aria-label="模型选择">
+                <button
+                  type="button"
+                  class="setup-segment"
+                  :class="{ active: modelId === 'deepseek-v4-flash' }"
+                  @click="modelId = 'deepseek-v4-flash'"
+                >
+                  Flash
+                </button>
+                <button
+                  type="button"
+                  class="setup-segment"
+                  :class="{ active: modelId === 'deepseek-v4-pro' }"
+                  @click="modelId = 'deepseek-v4-pro'"
+                >
+                  Pro
+                </button>
+              </div>
+            </div>
+
+            <div class="setup-control-row">
+              <div>
+                <label class="setup-control-label">推理深度</label>
+              </div>
+              <div class="setup-segmented" role="radiogroup" aria-label="推理深度">
+                <button
+                  type="button"
+                  class="setup-segment"
+                  :class="{ active: reasoningEffort === 'high' }"
+                  @click="reasoningEffort = 'high'"
+                >
+                  High
+                </button>
+                <button
+                  type="button"
+                  class="setup-segment"
+                  :class="{ active: reasoningEffort === 'max' }"
+                  @click="reasoningEffort = 'max'"
+                >
+                  Max
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- Feature badges -->
           <div class="flex flex-wrap gap-2 mb-6">
             <div class="setup-badge">
@@ -73,6 +124,8 @@
 
 <script lang="ts" setup>
 const topic = defineModel<string>("topic", { required: true });
+const modelId = defineModel<"deepseek-v4-flash" | "deepseek-v4-pro">("modelId", { required: true });
+const reasoningEffort = defineModel<"high" | "max">("reasoningEffort", { required: true });
 
 defineEmits<{
   start: [topic: string];
@@ -156,6 +209,53 @@ defineEmits<{
   background: rgba(0, 0, 0, 0.35);
   border-color: rgba(59, 130, 246, 0.5);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ── Model Controls ── */
+.setup-controls {
+  display: grid;
+  gap: 10px;
+}
+.setup-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.setup-control-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #d1d5db;
+}
+.setup-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(82px, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.setup-segment {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #9ca3af;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.setup-segment:hover {
+  color: #e5e7eb;
+}
+.setup-segment.active {
+  color: #ffffff;
+  background: rgba(59, 130, 246, 0.7);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.2);
 }
 
 /* ── Feature Badge ── */

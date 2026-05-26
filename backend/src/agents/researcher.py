@@ -58,9 +58,7 @@ class ResearcherAgent(BaseAgent):
         self, context: dict[str, Any], state: SummaryState, task: TodoItem,
     ) -> AgentResult:
         """仅执行搜索，返回原始结果。"""
-        search_result, notices, answer_text, backend = dispatch_search(
-            task.query, self._config, state.research_loop_count,
-        )
+        search_result, notices, backend = dispatch_search(task.query, self._config)
         if not search_result or not search_result.get("results"):
             return AgentResult(success=False, data={"error": "No search results"})
 
@@ -97,7 +95,7 @@ class ResearcherAgent(BaseAgent):
         sources_summary, research_context = prepare_research_context(search_payload, self._config)
 
         # 摘要
-        summary = self._summarizer.summarize_task(task, research_context)
+        summary = self._summarizer.summarize_task(state, task, research_context)
 
         return AgentResult(
             success=bool(summary),

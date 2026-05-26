@@ -10,7 +10,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Ensure src directory is in sys.path for module imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +46,14 @@ class ResearchRequest(BaseModel):
     """触发研究运行的负载。"""
 
     topic: str = Field(..., description="用户提供的研究主题")
+    llm_model_id: Literal["deepseek-v4-flash", "deepseek-v4-pro"] | None = Field(
+        default=None,
+        description="本次任务使用的 DeepSeek 模型",
+    )
+    llm_reasoning_effort: Literal["high", "max"] | None = Field(
+        default=None,
+        description="关键任务的推理强度",
+    )
 
 class PodcastScript(BaseModel):
     """播客脚本内容模型。"""
@@ -66,6 +74,10 @@ class ResearchResponse(BaseModel):
         default=None,
         description="生成的播客脚本内容",
     )
+    podcast_blueprint: dict[str, Any] | None = Field(
+        default=None,
+        description="生成的播客节目蓝图",
+    )
 
 
 def _mask_secret(value: str | None, visible: int = 4) -> str:
@@ -79,8 +91,14 @@ def _mask_secret(value: str | None, visible: int = 4) -> str:
     return f"{value[:visible]}...{value[-visible:]}"
 
 
-def _build_config() -> Configuration:
-    return Configuration.from_env()
+def _build_config(payload: ResearchRequest | None = None) -> Configuration:
+    overrides: dict[str, Any] = {}
+    if payload is not None:
+        if payload.llm_model_id:
+            overrides["llm_model_id"] = payload.llm_model_id
+        if payload.llm_reasoning_effort:
+            overrides["llm_reasoning_effort"] = payload.llm_reasoning_effort
+    return Configuration.from_env(overrides)
 
 
 def create_app() -> FastAPI:
@@ -100,7 +118,7 @@ def create_app() -> FastAPI:
         logger.info(
             "DeepResearch configuration loaded: model=%s base_url=%s search_api=%s "
             "max_loops=%s fetch_full_page=%s strip_thinking=%s api_key=%s",
-            config.llm_model_id or "unset",
+            config.active_llm_model(),
             config.llm_base_url or "unset",
             config.search_api.value,
             config.max_web_research_loops,
@@ -163,7 +181,7 @@ def create_app() -> FastAPI:
         执行完整的研究流程，并在 HTTP 响应中一次性返回所有结果。
         """
         try:
-            config = _build_config()
+            config = _build_config(payload)
             agent = DeepResearchAgent(config=config)
             result = agent.run(payload.topic)
         except ValueError as exc:  # Likely due to unsupported configuration
@@ -199,6 +217,7 @@ def create_app() -> FastAPI:
         return ResearchResponse(
             report_markdown=(result.report_markdown or result.running_summary or ""),
             todo_items=todo_payload,
+            podcast_blueprint=result.podcast_blueprint,
             podcast_script=podcast_resp,
         )
 
@@ -225,14 +244,14 @@ def create_app() -> FastAPI:
         支持客户端断开连接时自动取消后端任务。
         """
         try:
-            config = _build_config()
+            config = _build_config(payload)
             agent = DeepResearchAgent(config=config)
             _active_agent["current"] = agent  # 注册活跃 agent 以支持取消
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         async def event_iterator():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             # 用 asyncio.Queue 桥接同步生成器和异步循环
             # 生成器在单一后台线程中完整运行，避免并发调用 next() 破坏生成器状态
             event_queue: asyncio.Queue = asyncio.Queue()
@@ -250,7 +269,7 @@ def create_app() -> FastAPI:
                     logger.exception("Generator raised exception")
                     loop.call_soon_threadsafe(
                         event_queue.put_nowait,
-                        {"type": "error", "detail": str(exc)},
+                        {"type": "error", "detail": f"{exc.__class__.__name__}: {exc}"},
                     )
                 finally:
                     loop.call_soon_threadsafe(event_queue.put_nowait, _SENTINEL)
@@ -267,6 +286,8 @@ def create_app() -> FastAPI:
             monitor_task = asyncio.create_task(monitor_disconnect())
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             loop.run_in_executor(executor, run_generator)
+            heartbeat_interval = max(config.sse_heartbeat_interval, 5)
+            last_heartbeat_at = loop.time()
 
             try:
                 while True:
@@ -279,6 +300,14 @@ def create_app() -> FastAPI:
                             logger.info("✅ 本次任务已取消（超时检测）")
                             yield 'data: {"type": "cancelled", "message": "研究任务已被用户取消"}\n\n'
                             break
+                        now = loop.time()
+                        if now - last_heartbeat_at >= heartbeat_interval:
+                            heartbeat = {
+                                "type": "heartbeat",
+                                "message": "后端仍在处理，请保持页面打开",
+                            }
+                            yield f"data: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
+                            last_heartbeat_at = now
                         continue
 
                     # 哨兵：生成器已结束
@@ -287,6 +316,7 @@ def create_app() -> FastAPI:
 
                     event = item
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    last_heartbeat_at = loop.time()
 
                     if event.get("type") in ("done", "cancelled", "error"):
                         break

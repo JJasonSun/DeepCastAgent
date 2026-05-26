@@ -160,12 +160,18 @@ class ReportingService:
             "请整合所有任务的研究发现，撰写一份结构化的深度研究报告。"
             "报告必须围绕核心问题展开，保留证据线索，避免无来源的强结论。"
         )
+        extra_body = self._config.build_thinking_body(enable=True)
+        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
         response = call_llm(
             client=self._client,
             system_prompt=report_writer_instructions.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         report_text = response.strip()
@@ -205,14 +211,20 @@ class ReportingService:
             f"研究主题：{state.research_topic}\n\n"
             f"<TASK_CONTEXT>\n{tasks_context}\n</TASK_CONTEXT>"
         )
+        extra_body = self._config.build_thinking_body(enable=True)
+        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
         result = call_llm_json(
             client=self._client,
             system_prompt=report_outline_instructions.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
             json_schema=REPORT_OUTLINE_JSON_SCHEMA,
             schema_name="report_outline",
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         if isinstance(result, dict):
@@ -363,14 +375,20 @@ class ReportingService:
             f"请评估以下研究报告的质量：\n\n"
             f"{'=' * 40}\n{report}\n{'=' * 40}"
         )
+        extra_body = self._config.build_thinking_body(enable=True)
+        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
         result = call_llm_json(
             client=self._client,
             system_prompt=report_critic_instructions.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
             json_schema=CRITIC_JSON_SCHEMA,
             schema_name="report_critique",
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         if isinstance(result, dict):
@@ -403,12 +421,18 @@ class ReportingService:
             f"{report}\n\n"
             "请输出修改后的完整报告（Markdown 格式），不要输出其他内容。"
         )
+        extra_body = self._config.build_thinking_body(enable=True)
+        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
         response = call_llm(
             client=self._client,
             system_prompt=report_writer_instructions.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         refined_text = response.strip()

@@ -26,8 +26,8 @@
       <!-- Main Content -->
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-5">
 
-        <!-- Left Column: Progress Steps -->
-        <div class="lg:col-span-1">
+        <!-- Left Column: Progress Steps & Preview Player -->
+        <div class="lg:col-span-1 flex flex-col gap-4">
           <div class="pipeline-card rounded-2xl h-[500px]">
             <!-- Top progress bar -->
             <div class="pipeline-progress-bar">
@@ -119,6 +119,52 @@
               </div>
             </div>
           </div>
+
+          <!-- MP3 Preview Player -->
+          <section class="mp3-preview-card" :class="{ 'mp3-preview-card--ready': podcastReady }">
+            <div class="mp3-preview-header">
+              <div>
+                <p class="mp3-preview-eyebrow">试听成片</p>
+                <h3 class="mp3-preview-title">MP3 播放器</h3>
+              </div>
+              <span class="mp3-preview-status" :class="{ 'mp3-preview-status--ready': podcastReady }">
+                {{ podcastReady ? "已生成" : "生成中" }}
+              </span>
+            </div>
+
+            <div class="mp3-file-row">
+              <div class="mp3-file-icon">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"/>
+                </svg>
+              </div>
+              <div class="min-w-0">
+                <p class="mp3-file-name">{{ podcastReady ? "DeepCast 播客成片.mp3" : "等待音频合成完成" }}</p>
+                <p class="mp3-file-meta">{{ podcastReady ? "可以试听、下载或进入完整播放器" : "完成后会自动出现播放控件" }}</p>
+              </div>
+            </div>
+
+            <audio v-if="podcastReady" class="mp3-audio-player" :src="audioUrl" controls></audio>
+            <div v-else class="mp3-player-placeholder">
+              <div class="mp3-placeholder-track">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <p>音频生成后可在这里直接试听</p>
+            </div>
+
+            <div v-if="podcastReady" class="mp3-actions">
+              <a :href="audioUrl" download class="mp3-action-primary" aria-label="下载播客 MP3 文件">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                下载
+              </a>
+              <button class="mp3-action-secondary" @click="$emit('goPlayer')" aria-label="进入完整播放器">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
+                播放器
+              </button>
+            </div>
+          </section>
         </div>
 
         <!-- Right Column: Logs & Output -->
@@ -127,30 +173,51 @@
           <!-- macOS Style Terminal -->
           <TerminalLog ref="terminalRef" :logs="logs" :is-waiting="isWaiting" :waiting-dots="waitingDots" />
 
-          <!-- Result Actions -->
-          <div v-if="podcastReady" class="flex gap-3">
-            <a :href="audioUrl" download class="btn macos-btn-primary flex-1 btn-lg text-base rounded-xl border-0 gap-2">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              下载 MP3
-            </a>
-            <button class="btn result-btn-secondary flex-1 btn-lg text-base rounded-xl gap-2" @click="$emit('goPlayer')">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
-              进入播放器
-            </button>
-          </div>
-
-          <!-- Inline Player -->
-          <div v-if="podcastReady" class="player-inline-card rounded-xl">
-            <div class="p-4">
-              <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
-                  <svg class="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"/></svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-200">快速试听</h3>
+          <!-- Podcast Blueprint -->
+          <section v-if="podcastBlueprint" class="blueprint-panel">
+            <div class="blueprint-header">
+              <div>
+                <p class="blueprint-eyebrow">节目蓝图</p>
+                <h3 class="blueprint-title">{{ podcastBlueprint.title || "未命名节目" }}</h3>
               </div>
-              <audio class="w-full audio-player" :src="audioUrl" controls></audio>
+              <span class="blueprint-badge">{{ sectionCount }} 段</span>
             </div>
-          </div>
+
+            <div class="blueprint-grid">
+              <div class="blueprint-meta">
+                <span>听众</span>
+                <p>{{ podcastBlueprint.target_listener || "面向泛知识学习者" }}</p>
+              </div>
+              <div class="blueprint-meta">
+                <span>语气</span>
+                <p>{{ podcastBlueprint.tone || "自然、清晰、有节奏" }}</p>
+              </div>
+            </div>
+
+            <div v-if="podcastBlueprint.hook" class="blueprint-hook">
+              <span>Hook</span>
+              <p>{{ podcastBlueprint.hook }}</p>
+            </div>
+
+            <div v-if="podcastBlueprint.sections?.length" class="blueprint-sections">
+              <article v-for="(section, index) in podcastBlueprint.sections" :key="`${section.segment_title || 'section'}-${index}`" class="blueprint-section">
+                <div class="blueprint-section-index">{{ index + 1 }}</div>
+                <div class="min-w-0">
+                  <h4>{{ section.segment_title || `话题 ${index + 1}` }}</h4>
+                  <p v-if="section.listener_question" class="blueprint-question">{{ section.listener_question }}</p>
+                  <ul v-if="section.key_points?.length" class="blueprint-points">
+                    <li v-for="point in section.key_points.slice(0, 2)" :key="point">{{ point }}</li>
+                  </ul>
+                  <p v-if="section.transition" class="blueprint-transition">{{ section.transition }}</p>
+                </div>
+              </article>
+            </div>
+
+            <div v-if="podcastBlueprint.cta" class="blueprint-cta">
+              <span>CTA</span>
+              <p>{{ podcastBlueprint.cta }}</p>
+            </div>
+          </section>
 
         </div>
       </div>
@@ -164,6 +231,24 @@ import TerminalLog from "./TerminalLog.vue";
 import type { LogEntry } from "./TerminalLog.vue";
 
 export type ProductionStage = "research" | "script" | "audio" | "done" | "cancelled";
+
+export interface PodcastBlueprintSection {
+  segment_title?: string;
+  listener_question?: string;
+  key_points?: string[];
+  host_questions?: string[];
+  transition?: string;
+}
+
+export interface PodcastBlueprint {
+  title?: string;
+  target_listener?: string;
+  tone?: string;
+  hook?: string;
+  sections?: PodcastBlueprintSection[];
+  closing?: string;
+  cta?: string;
+}
 
 interface PipelineStep {
   id: ProductionStage;
@@ -189,6 +274,7 @@ const props = defineProps<{
   progressPercent: number;
   reportReady: boolean;
   podcastReady: boolean;
+  podcastBlueprint: PodcastBlueprint | null;
   audioUrl: string;
 }>();
 
@@ -208,6 +294,7 @@ defineExpose({ scrollTerminal });
 
 const progress = toRef(props, 'progressPercent');
 const currentIdx = computed(() => stepsOrder.indexOf(props.productionStage));
+const sectionCount = computed(() => props.podcastBlueprint?.sections?.length || 0);
 
 const isCancelled = computed(() => props.productionStage === 'cancelled');
 
@@ -480,48 +567,320 @@ function isStepPending(stepId: ProductionStage) {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
-/* ── Result Buttons ── */
-.macos-btn-primary {
-  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.15);
-  transition: all 0.2s;
+/* ── MP3 Preview Player ── */
+.mp3-preview-card {
+  background: rgba(18, 21, 29, 0.82);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
 }
-.macos-btn-primary:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+.mp3-preview-card--ready {
+  border-color: rgba(34, 197, 94, 0.18);
 }
-.macos-btn-primary:active { transform: translateY(0.5px); filter: brightness(0.95); }
-
-.result-btn-secondary {
-  background: rgba(255, 255, 255, 0.06);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
-  transition: all 0.2s;
+.mp3-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
 }
-.result-btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.15);
-  transform: translateY(-1px);
+.mp3-preview-eyebrow {
+  color: #818cf8;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
 }
-
-/* ── Inline Player ── */
-.player-inline-card {
-  background: rgba(22, 24, 30, 0.7);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+.mp3-preview-title {
+  margin-top: 5px;
+  color: #f8fafc;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
 }
-.audio-player {
-  opacity: 0.9;
+.mp3-preview-status {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+}
+.mp3-preview-status--ready {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+.mp3-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
   border-radius: 8px;
-  transition: opacity 0.2s;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  margin-bottom: 12px;
 }
-.audio-player:hover {
+.mp3-file-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #bfdbfe;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(99, 102, 241, 0.18));
+  border: 1px solid rgba(147, 197, 253, 0.12);
+}
+.mp3-file-name {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp3-file-meta {
+  margin-top: 2px;
+  color: #7c8798;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.mp3-audio-player {
+  width: 100%;
+  height: 38px;
+  display: block;
+  opacity: 0.92;
+  border-radius: 8px;
+}
+.mp3-audio-player:hover {
   opacity: 1;
+}
+.mp3-player-placeholder {
+  min-height: 72px;
+  border-radius: 8px;
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.025);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 11px;
+  text-align: center;
+}
+.mp3-placeholder-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mp3-placeholder-track span {
+  width: 28px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+.mp3-placeholder-track span:nth-child(2) {
+  width: 46px;
+  background: rgba(96, 165, 250, 0.22);
+}
+.mp3-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+.mp3-action-primary,
+.mp3-action-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease,
+    filter 0.2s ease;
+}
+.mp3-action-primary {
+  color: #fff;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.mp3-action-secondary {
+  color: #dbeafe;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.085);
+}
+.mp3-action-primary:hover,
+.mp3-action-secondary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+/* ── Podcast Blueprint ── */
+.blueprint-panel {
+  background: rgba(20, 24, 32, 0.78);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+.blueprint-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.blueprint-eyebrow {
+  font-size: 11px;
+  line-height: 1;
+  color: #38bdf8;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.blueprint-title {
+  margin-top: 5px;
+  font-size: 15px;
+  line-height: 1.35;
+  font-weight: 700;
+  color: #f8fafc;
+}
+.blueprint-badge {
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.18);
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 700;
+}
+.blueprint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.blueprint-meta,
+.blueprint-hook,
+.blueprint-cta {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 10px;
+}
+.blueprint-meta span,
+.blueprint-hook span,
+.blueprint-cta span {
+  display: block;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.blueprint-meta p,
+.blueprint-hook p,
+.blueprint-cta p {
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+}
+.blueprint-sections {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.blueprint-section {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+.blueprint-section-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 800;
+}
+.blueprint-section h4 {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.blueprint-question,
+.blueprint-transition {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.blueprint-question {
+  color: #cbd5e1;
+}
+.blueprint-transition {
+  color: #8ca3bd;
+}
+.blueprint-points {
+  display: grid;
+  gap: 3px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.blueprint-points li {
+  position: relative;
+  padding-left: 12px;
+  color: #a5b4fc;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.blueprint-points li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.65em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #60a5fa;
+}
+.blueprint-cta {
+  margin-top: 10px;
+}
+
+@media (max-width: 640px) {
+  .blueprint-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Animations ── */

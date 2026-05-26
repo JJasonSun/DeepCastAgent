@@ -147,7 +147,7 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 ```
 用户输入主题
   → MemoryManager → 检索相关历史研究记忆
-  → PlanningService（smart LLM + XGrammar 结构化输出）→ TodoItem[] 任务列表
+  → PlanningService（DeepSeek JSON Output）→ TodoItem[] 任务列表
   → [并行] SearchService（Tavily + SerpApi + LLM 结果过滤 + 域名权威性排序）→ SummarizationService（fast LLM）
   → RefinePhase（smart LLM）→ 递归反思覆盖/缺口/来源策略 → 补充搜索（迭代至饱和 + 智能终止）
   → ReportingService（smart LLM）→ 报告大纲 → 初稿 → Critic 评估 → 修改 → 结构化 Markdown 报告
@@ -157,8 +157,8 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 ```
 
 **技术栈：**
-- **智能体编排：** 自研多智能体工作流（DirectorAgent + PlannerAgent/ResearcherAgent/CriticAgent/WriterAgent），基于 OpenAI SDK + XGrammar 结构化输出
-- **大语言模型：** `ecnu-reasoner`（深度推理）、`ecnu-max`（快速响应）
+- **智能体编排：** 自研多智能体工作流（DirectorAgent + PlannerAgent/ResearcherAgent/CriticAgent/WriterAgent），基于 OpenAI SDK + DeepSeek JSON Output
+- **大语言模型：** 默认 `deepseek-v4-flash`，前端可切换 `deepseek-v4-pro`；深度搜索反思与报告质量链路支持 `high/max` 推理强度
 - **语音合成：** MiMo-V2.5-TTS（导演模式 + VoiceDesign 文本音色设计 + 音频标签）
 - **后端：** Python 3.10+, FastAPI, Pydantic
 - **前端：** Vue 3, Vite, TypeScript, Tailwind CSS 4 + DaisyUI 5

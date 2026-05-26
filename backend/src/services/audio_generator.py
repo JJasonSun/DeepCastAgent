@@ -11,6 +11,7 @@ from threading import Event
 from openai import OpenAI
 
 from config import Configuration
+from services.llm import run_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,7 @@ class AudioGenerationService:
             client = OpenAI(
                 api_key=self._config.tts_api_key,
                 base_url=self._config.tts_base_url,
+                max_retries=0,
             )
 
             # 构建导演模式 style 指令
@@ -209,11 +211,16 @@ class AudioGenerationService:
 
             logger.debug("Calling MiMo TTS (model=%s) for %s: %s...", model, role, tts_text[:20])
 
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                audio=audio_params,
-                timeout=self._config.tts_timeout,
+            completion = run_with_retry(
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    audio=audio_params,
+                    timeout=self._config.tts_timeout,
+                ),
+                operation_name=f"MiMo TTS ({role})",
+                max_retries=self._config.tts_max_retries,
+                retry_base_delay=self._config.llm_retry_base_delay,
             )
 
             audio_data = completion.choices[0].message.audio

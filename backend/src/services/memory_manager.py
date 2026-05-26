@@ -254,14 +254,18 @@ class MemoryManager:
             research_topic=topic,
             research_summary=summary[:3000],  # 限制长度避免 token 过多
         )
+        extra_body = self._config.build_thinking_body(enable=False)
 
         result = call_llm_json(
             client=self._client,
             system_prompt="你是一名信息提取专家。",
             user_prompt=prompt,
-            model=self._config.fast_llm_model,
+            model=self._config.active_llm_model(),
             json_schema=MEMORY_EXTRACTION_SCHEMA,
             schema_name="memory_extraction",
+            extra_body=extra_body,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         if isinstance(result, dict):

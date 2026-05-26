@@ -4,6 +4,8 @@
     <SetupView
       v-if="currentView === 'setup'"
       v-model:topic="form.topic"
+      v-model:model-id="form.llmModelId"
+      v-model:reasoning-effort="form.reasoningEffort"
       @start="startProduction"
     />
 
@@ -18,6 +20,7 @@
       :progress-percent="progressPercent"
       :report-ready="reportReady"
       :podcast-ready="podcastReady"
+      :podcast-blueprint="podcastBlueprint"
       :audio-url="audioUrl"
       @cancel="cancelProduction"
       @download-report="downloadReport"
@@ -44,7 +47,7 @@ import SetupView from "./components/SetupView.vue";
 import ProductionView from "./components/ProductionView.vue";
 import PlayerView from "./components/PlayerView.vue";
 import type { LogEntry } from "./components/TerminalLog.vue";
-import type { ProductionStage } from "./components/ProductionView.vue";
+import type { PodcastBlueprint, ProductionStage } from "./components/ProductionView.vue";
 
 // --- Types ---
 type ViewState = "setup" | "producing" | "player";
@@ -52,7 +55,11 @@ type ViewState = "setup" | "producing" | "player";
 // --- State ---
 const currentView = ref<ViewState>("setup");
 const productionStage = ref<ProductionStage>("research");
-const form = reactive({ topic: "" });
+const form = reactive({
+  topic: "",
+  llmModelId: "deepseek-v4-flash" as "deepseek-v4-flash" | "deepseek-v4-pro",
+  reasoningEffort: "high" as "high" | "max"
+});
 
 const logs = ref<LogEntry[]>([]);
 const reportReady = ref(false);
@@ -67,6 +74,7 @@ let waitingInterval: ReturnType<typeof setInterval> | null = null;
 
 const reportMarkdown = ref("");
 const audioUrl = ref("");
+const podcastBlueprint = ref<PodcastBlueprint | null>(null);
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 let abortController: AbortController | null = null;
@@ -110,6 +118,7 @@ async function startProduction() {
   logs.value = [];
   reportMarkdown.value = "";
   audioUrl.value = "";
+  podcastBlueprint.value = null;
   audioProgress.current = 0;
   audioProgress.total = 0;
   taskProgress.completed = 0;
@@ -123,10 +132,15 @@ async function startProduction() {
 
   addLog("🚀 启动 DeepCast 制作流程...");
   addLog(`📌 主题: ${form.topic}`);
+  addLog(`🧠 模型: ${form.llmModelId} / 关键任务推理强度: ${form.reasoningEffort}`);
 
   try {
     await runResearchStream(
-      { topic: form.topic },
+      {
+        topic: form.topic,
+        llm_model_id: form.llmModelId,
+        llm_reasoning_effort: form.reasoningEffort
+      },
       handleStreamEvent,
       { signal: abortController.signal }
     );
@@ -136,13 +150,31 @@ async function startProduction() {
     } else {
       addLog(`❌ 错误: ${err.message || err}`);
       console.error(err);
+      cancelResearch().catch(() => {});
     }
   } finally {
     stopWaitingAnimation();
+    abortController = null;
   }
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
+  if (event.type === "heartbeat") {
+    return;
+  }
+
+  if (event.type === "client_retry") {
+    addLog(`🔁 [RETRY] ${(event as any).message || "连接波动，正在重试"}`);
+    return;
+  }
+
+  if (event.type === "error") {
+    const detail = String((event as any).detail || (event as any).message || "后端任务失败");
+    addLog(`❌ [ERROR] ${detail}`);
+    stopWaitingAnimation();
+    return;
+  }
+
   if (event.type === "log") {
     const msg = String((event as any).message || "");
     const cleanMsg = msg.replace(/\u001b\[\d+m/g, "");
@@ -251,6 +283,14 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     }
   }
 
+  if (event.type === "podcast_blueprint") {
+    const p = event as any;
+    podcastBlueprint.value = (p.blueprint || null) as PodcastBlueprint | null;
+    const title = podcastBlueprint.value?.title || "未命名节目";
+    const sectionCount = podcastBlueprint.value?.sections?.length || p.section_count || 0;
+    addLog(`🧩 [BLUEPRINT] 节目蓝图已生成: ${title}（${sectionCount} 个段落）`);
+  }
+
   if (event.type === "final_report") {
     reportMarkdown.value = String((event as any).report);
     reportReady.value = true;
@@ -351,6 +391,7 @@ function resetApp() {
   form.topic = "";
   reportReady.value = false;
   podcastReady.value = false;
+  podcastBlueprint.value = null;
   audioUrl.value = "";
   stopWaitingAnimation();
 }

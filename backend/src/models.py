@@ -36,6 +36,7 @@ class SummaryState:
     structured_report: str | None = field(default=None)  # 结构化报告（JSON 字符串）
     report_note_id: str | None = field(default=None)  # 报告笔记 ID
     report_note_path: str | None = field(default=None)  # 报告笔记路径
+    podcast_blueprint: dict | None = field(default=None)  # 播客节目蓝图
     podcast_script: list | None = field(default=None)  # 播客脚本（JSON 字符串）
 
 
@@ -49,5 +50,6 @@ class SummaryStateOutput:
     running_summary: str | None = field(default=None)  # 向后兼容的摘要文本
     report_markdown: str | None = field(default=None)
     todo_items: list[TodoItem] = field(default_factory=list)
+    podcast_blueprint: dict | None = field(default=None)
     podcast_script: list | None = field(default=None)
 

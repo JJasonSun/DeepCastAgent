@@ -67,19 +67,14 @@ class Configuration(BaseModel):
         description="使用自定义 OpenAI 兼容服务时的可选基础 URL",
     )
     llm_model_id: str | None = Field(
-        default=None,
+        default="deepseek-v4-flash",
         title="LLM 模型 ID",
-        description="自定义 OpenAI 兼容服务的可选模型标识符",
+        description="当前任务使用的 DeepSeek 模型 ID",
     )
-    smart_llm_model: str | None = Field(
-        default="ecnu-reasoner",
-        title="Smart LLM Model",
-        description="复杂推理任务使用的模型 ID (e.g. Planning, Reporting)",
-    )
-    fast_llm_model: str | None = Field(
-        default="ecnu-max",
-        title="Fast LLM Model",
-        description="快速响应任务使用的模型 ID (e.g. Web Research, Script Generation)",
+    llm_reasoning_effort: str = Field(
+        default="high",
+        title="LLM 思考强度",
+        description="DeepSeek 思考模式推理强度 (high/max)",
     )
     tts_api_key: str | None = Field(
         default=None,
@@ -146,10 +141,35 @@ class Configuration(BaseModel):
         title="LLM 超时",
         description="LLM 请求超时时间（秒）",
     )
+    llm_max_retries: int = Field(
+        default=3,
+        title="LLM 最大重试次数",
+        description="LLM 网络连接、超时、限流或 5xx 错误的应用层重试次数",
+    )
+    llm_retry_base_delay: float = Field(
+        default=1.0,
+        title="LLM 重试基础等待",
+        description="LLM 重试指数退避的基础等待秒数",
+    )
     tts_timeout: int = Field(
         default=300,
         title="TTS 超时",
         description="TTS 请求超时时间（秒）",
+    )
+    tts_max_retries: int = Field(
+        default=3,
+        title="TTS 最大重试次数",
+        description="TTS 网络连接、超时、限流或 5xx 错误的应用层重试次数",
+    )
+    search_max_retries: int = Field(
+        default=2,
+        title="搜索最大重试次数",
+        description="搜索 API 网络连接、超时、限流或 5xx 错误的应用层重试次数",
+    )
+    sse_heartbeat_interval: int = Field(
+        default=15,
+        title="SSE 心跳间隔",
+        description="流式接口无业务事件时向前端发送 heartbeat 的间隔秒数",
     )
     max_research_refine_rounds: int = Field(
         default=2,
@@ -198,6 +218,14 @@ class Configuration(BaseModel):
             return str(BACKEND_ROOT / path)
         return v
 
+    @field_validator("llm_reasoning_effort")
+    @classmethod
+    def validate_reasoning_effort(cls, v: str) -> str:
+        """限制 DeepSeek thinking mode 的推理强度配置。"""
+        if v not in {"high", "max"}:
+            raise ValueError("llm_reasoning_effort must be 'high' or 'max'")
+        return v
+
     @classmethod
     def from_env(cls, overrides: dict[str, Any] | None = None) -> "Configuration":
         """
@@ -230,3 +258,19 @@ class Configuration(BaseModel):
                     raw_values[key] = value
 
         return cls(**raw_values)
+
+    def build_thinking_body(self, *, enable: bool) -> dict[str, Any] | None:
+        """构建 DeepSeek 思考模式的 extra_body 参数。"""
+        if enable:
+            return {"thinking": {"type": "enabled"}}
+        return {"thinking": {"type": "disabled"}}
+
+    def build_reasoning_effort(self, *, enable: bool) -> str | None:
+        """在启用思考模式时返回推理强度参数。"""
+        if enable:
+            return self.llm_reasoning_effort
+        return None
+
+    def active_llm_model(self) -> str:
+        """返回当前任务实际使用的 LLM 模型。"""
+        return self.llm_model_id or "deepseek-v4-flash"

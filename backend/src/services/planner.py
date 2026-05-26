@@ -20,7 +20,7 @@ from services.llm import call_llm_json
 
 logger = logging.getLogger(__name__)
 
-# 规划器输出的 JSON Schema（用于 XGrammar 约束解码，保证 100% 结构正确）
+# 规划器输出的 JSON Schema（用于 DeepSeek JSON Output 提示与本地解析）
 PLANNER_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -138,14 +138,18 @@ class PlanningService:
             research_topic=state.research_topic,
             historical_context=historical_context,
         )
+        extra_body = self._config.build_thinking_body(enable=False)
 
         result = call_llm_json(
             client=self._client,
             system_prompt=todo_planner_system_prompt.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
             json_schema=PLANNER_JSON_SCHEMA,
             schema_name="research_tasks",
+            extra_body=extra_body,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         # 结构化输出保证 JSON 格式正确，直接提取 tasks 数组
@@ -209,14 +213,20 @@ class PlanningService:
             existing_summaries=existing_summaries,
             previous_queries=previous_queries,
         )
+        extra_body = self._config.build_thinking_body(enable=True)
+        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
         result = call_llm_json(
             client=self._client,
             system_prompt=research_analyzer_system_prompt.strip(),
             user_prompt=prompt,
-            model=self._config.smart_llm_model,
+            model=self._config.active_llm_model(),
             json_schema=REFINE_JSON_SCHEMA,
             schema_name="refine_decision",
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         if not result or not isinstance(result, dict):

@@ -60,10 +60,7 @@ def main():
     
     # Print some config to verify
     print("\nCurrent Configuration:")
-    print(f"LLM Provider: {config.llm_provider}")
-    print(f"Model: {config.resolved_model()}")
-    print(f"Smart Model: {config.smart_llm_model}")
-    print(f"Fast Model: {config.fast_llm_model}")
+    print(f"Model: {config.active_llm_model()}")
     print(f"Search API: {config.search_api}")
     print(f"TTS Enabled: {bool(config.tts_api_key)}")
     print(f"FFmpeg Path: {config.ffmpeg_path}")

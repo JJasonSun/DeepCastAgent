@@ -60,7 +60,7 @@ class DeepResearchAgent:
         self.script_generator = ScriptGenerationService(self.config)
         self.audio_generator = AudioGenerationService(self.config)
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
-        self.memory_manager = MemoryManager(self.config, self.fast_client) if config.enable_memory else None
+        self.memory_manager = MemoryManager(self.config, self.fast_client) if self.config.enable_memory else None
 
         # 多智能体架构：Director + 专业 Agent
         self.director = self._init_director()
@@ -82,6 +82,8 @@ class DeepResearchAgent:
         return OpenAI(
             api_key=self.config.llm_api_key,
             base_url=self.config.llm_base_url,
+            timeout=self.config.llm_timeout,
+            max_retries=0,
         )
 
     def _init_director(self) -> "DirectorAgent":
@@ -166,6 +168,7 @@ class DeepResearchAgent:
             running_summary=report,
             report_markdown=report,
             todo_items=state.todo_items,
+            podcast_blueprint=state.podcast_blueprint,
             podcast_script=script,
         )
 
@@ -367,7 +370,7 @@ class DeepResearchAgent:
             "stage": "report",
             "message": "所有研究任务已完成，正在撰写深度研究报告...",
         }
-        yield {"type": "log", "message": f"正在调用 {self.config.smart_llm_model} 模型撰写深度报告..."}
+        yield {"type": "log", "message": f"正在调用 {self.config.active_llm_model()} 模型撰写深度报告..."}
 
         if self.is_cancelled():
             return
@@ -620,12 +623,26 @@ class DeepResearchAgent:
             "stage": "script",
             "message": "正在将研究报告转化为双人对谈播客脚本...",
         }
-        yield {"type": "log", "message": f"正在调用 {self.config.fast_llm_model} 模型生成播客脚本..."}
+        yield {"type": "log", "message": f"正在调用 {self.config.active_llm_model()} 模型生成播客脚本..."}
         yield {"type": "log", "message": "脚本策划专家正在规划节目蓝图，并创作 Host (苏打) 与 Guest (茉莉) 的对话..."}
 
         if self.is_cancelled():
             return
-        script = self.script_generator.generate_script(state)
+        blueprint = self.script_generator.generate_blueprint(state)
+        if blueprint:
+            yield {
+                "type": "podcast_blueprint",
+                "blueprint": blueprint,
+                "section_count": len(blueprint.get("sections", []) or []),
+            }
+            yield {
+                "type": "log",
+                "message": f"节目蓝图已生成：{blueprint.get('title', '未命名节目')}",
+            }
+
+        if self.is_cancelled():
+            return
+        script = self.script_generator.generate_script(state, blueprint=blueprint)
         if self.is_cancelled():
             return
         for event in self._drain_tool_events(state):
@@ -787,10 +804,9 @@ class DeepResearchAgent:
                 "step": step,
             }
 
-        search_result, notices, answer_text, backend = dispatch_search(
+        search_result, notices, backend = dispatch_search(
             task.query,
             self.config,
-            state.research_loop_count,
         )
         task.notices = notices
 

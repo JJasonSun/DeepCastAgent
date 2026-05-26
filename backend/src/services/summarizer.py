@@ -30,12 +30,16 @@ class SummarizationService:
     def summarize_task(self, state: SummaryState, task: TodoItem, context: str) -> str:
         """使用 LLM 生成特定于任务的总结。"""
         prompt = self._build_prompt(state, task, context)
+        extra_body = self._config.build_thinking_body(enable=False)
 
         response = call_llm(
             client=self._client,
             system_prompt=task_summarizer_system_prompt.strip(),
             user_prompt=prompt,
-            model=self._config.fast_llm_model,
+            model=self._config.active_llm_model(),
+            extra_body=extra_body,
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
         )
 
         summary_text = response.strip()
@@ -55,6 +59,7 @@ class SummarizationService:
         raw_buffer = ""
         visible_output = ""
         emit_index = 0
+        extra_body = self._config.build_thinking_body(enable=False)
 
         def flush_visible() -> Iterator[str]:
             """处理缓冲区，提取并 yield 所有不在 <think>...</think> 块中的可见文本。"""
@@ -86,7 +91,10 @@ class SummarizationService:
                 client=self._client,
                 system_prompt=task_summarizer_system_prompt.strip(),
                 user_prompt=prompt,
-                model=self._config.fast_llm_model,
+                model=self._config.active_llm_model(),
+                extra_body=extra_body,
+                max_retries=self._config.llm_max_retries,
+                retry_base_delay=self._config.llm_retry_base_delay,
             ):
                 raw_buffer += chunk
                 if remove_thinking:
