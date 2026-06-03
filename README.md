@@ -212,6 +212,12 @@ python scripts/verify_ffmpeg.py         # 检查 FFmpeg
 python scripts/verify_search.py         # 测试搜索 API
 ```
 
+## 相关文档
+
+- [JD.md](docs/JD.md)：AI 产品经理相关岗位要求汇总，用于作品集和简历叙事对齐。
+- [豆包语音播客.md](docs/豆包语音播客.md)：豆包语音播客模型能力摘要。
+- [豆包播客竞品分析.md](docs/豆包播客竞品分析.md)：围绕豆包语音播客、NotebookLM、ElevenLabs 等产品的竞品分析。
+
 ## 项目结构
 
 ```
