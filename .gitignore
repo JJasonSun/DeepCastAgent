@@ -84,8 +84,3 @@ dist-ssr/
 
 # Project Specific (Preserved from original)
 output/
-.github/
-.claude/
-claude.md
-.agents/
-AGENTS.md
