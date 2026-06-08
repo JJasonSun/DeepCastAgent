@@ -18,7 +18,41 @@
 
       <!-- Main Card -->
       <div class="setup-card rounded-2xl">
-        <form @submit.prevent="$emit('start', topic)" class="p-7">
+        <form @submit.prevent="submitForm" class="p-7">
+          <!-- Health check -->
+          <div class="health-card mb-5" :class="healthCardClass">
+            <div class="health-card-head">
+              <span class="health-status-mark" :class="`health-status-mark--${healthStatus}`">
+                {{ healthStatusMark }}
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="health-title">{{ healthTitle }}</p>
+                <p class="health-subtitle">{{ healthSubtitle }}</p>
+              </div>
+              <button
+                type="button"
+                class="health-refresh"
+                :disabled="healthLoading"
+                @click="$emit('refreshHealth')"
+              >
+                {{ healthLoading ? "检查中" : "重新检查" }}
+              </button>
+            </div>
+
+            <ul v-if="visibleChecks.length > 0" class="health-list" aria-label="运行环境检查结果">
+              <li
+                v-for="item in visibleChecks"
+                :key="item.id"
+                class="health-item"
+                :class="`health-item--${item.status}`"
+              >
+                <span class="health-item-dot"></span>
+                <span class="health-item-label">{{ item.label }}</span>
+                <span class="health-item-message">{{ item.message }}</span>
+              </li>
+            </ul>
+          </div>
+
           <!-- Input area -->
           <div class="mb-5">
             <label for="topic-input" class="block text-sm font-medium text-gray-300 mb-2.5 flex items-center gap-2">
@@ -33,7 +67,7 @@
               required
               rows="4"
               aria-label="播客主题输入"
-              @keydown.enter.prevent="$emit('start', topic)"
+              @keydown.enter.prevent="submitForm"
             ></textarea>
           </div>
 
@@ -107,7 +141,7 @@
           <!-- Submit button -->
           <button
             class="setup-btn w-full"
-            :disabled="!topic.trim()"
+            :disabled="!canSubmit"
             aria-label="开始制作播客"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -123,13 +157,72 @@
 </template>
 
 <script lang="ts" setup>
+import { computed } from "vue";
+import type { HealthCheckItem, HealthCheckResponse, HealthStatus } from "../services/api";
+
 const topic = defineModel<string>("topic", { required: true });
 const modelId = defineModel<"deepseek-v4-flash" | "deepseek-v4-pro">("modelId", { required: true });
 const reasoningEffort = defineModel<"high" | "max">("reasoningEffort", { required: true });
 
-defineEmits<{
-  start: [topic: string];
+const props = defineProps<{
+  healthCheck: HealthCheckResponse | null;
+  healthLoading: boolean;
 }>();
+
+const emit = defineEmits<{
+  start: [topic: string];
+  refreshHealth: [];
+}>();
+
+const healthStatus = computed<HealthStatus>(() => {
+  if (props.healthLoading) return "warning";
+  return props.healthCheck?.status || "error";
+});
+
+const healthStatusMark = computed(() => {
+  if (props.healthLoading) return "...";
+  if (props.healthCheck?.status === "ok") return "✓";
+  if (props.healthCheck?.status === "warning") return "!";
+  return "×";
+});
+
+const healthTitle = computed(() => {
+  if (props.healthLoading) return "正在检查运行环境...";
+  if (!props.healthCheck) return "运行环境尚未检查";
+  if (props.healthCheck.status === "ok") return "运行环境正常";
+  if (props.healthCheck.status === "warning") return "运行环境有提示";
+  return "运行环境需要处理";
+});
+
+const healthSubtitle = computed(() => {
+  if (props.healthLoading) return "正在确认后端、密钥、FFmpeg 和输出目录";
+  if (!props.healthCheck) return "请先完成健康检查，再开始制作播客";
+  if (props.healthCheck.blocking) return "存在会导致制作失败的问题，请修复后重新检查";
+  if (props.healthCheck.status === "warning") return "可以继续制作，但部分能力可能降级";
+  return "可以输入主题并开始制作";
+});
+
+const visibleChecks = computed<HealthCheckItem[]>(() => {
+  if (props.healthLoading) return [];
+  return props.healthCheck?.checks || [];
+});
+
+const healthCardClass = computed(() => ({
+  "health-card--ok": healthStatus.value === "ok",
+  "health-card--warning": healthStatus.value === "warning",
+  "health-card--error": healthStatus.value === "error",
+}));
+
+const canSubmit = computed(() => {
+  const health = props.healthCheck;
+  if (!topic.value.trim() || props.healthLoading || !health) return false;
+  return !health.blocking;
+});
+
+function submitForm() {
+  if (!canSubmit.value) return;
+  emit("start", topic.value);
+}
 </script>
 
 <style scoped>
@@ -209,6 +302,126 @@ defineEmits<{
   background: rgba(0, 0, 0, 0.35);
   border-color: rgba(59, 130, 246, 0.5);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ── Health Check ── */
+.health-card {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.health-card--ok {
+  border-color: rgba(16, 185, 129, 0.26);
+  background: rgba(6, 78, 59, 0.16);
+}
+.health-card--warning {
+  border-color: rgba(245, 158, 11, 0.26);
+  background: rgba(120, 53, 15, 0.16);
+}
+.health-card--error {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.16);
+}
+.health-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.health-status-mark {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 800;
+}
+.health-status-mark--ok {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.13);
+}
+.health-status-mark--warning {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.13);
+}
+.health-status-mark--error {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.13);
+}
+.health-title {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 700;
+  color: #e5e7eb;
+}
+.health-subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #9ca3af;
+}
+.health-refresh {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #d1d5db;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.health-refresh:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.09);
+}
+.health-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.health-list {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.health-item {
+  display: grid;
+  grid-template-columns: 8px minmax(76px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.health-item-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #6b7280;
+}
+.health-item--ok .health-item-dot {
+  background: #34d399;
+}
+.health-item--warning .health-item-dot {
+  background: #fbbf24;
+}
+.health-item--error .health-item-dot {
+  background: #f87171;
+}
+.health-item-label {
+  color: #d1d5db;
+  font-weight: 700;
+}
+.health-item-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ── Model Controls ── */

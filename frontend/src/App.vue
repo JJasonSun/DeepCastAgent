@@ -6,7 +6,10 @@
       v-model:topic="form.topic"
       v-model:model-id="form.llmModelId"
       v-model:reasoning-effort="form.reasoningEffort"
+      :health-check="healthCheck"
+      :health-loading="healthLoading"
       @start="startProduction"
+      @refresh-health="refreshHealthCheck"
     />
 
     <!-- View 2: Production -->
@@ -40,8 +43,8 @@
 </template>
 
 <script lang="ts" setup>
-import { reactive, ref, nextTick } from "vue";
-import { runResearchStream, cancelResearch, type ResearchStreamEvent } from "./services/api";
+import { reactive, ref, nextTick, onMounted } from "vue";
+import { runResearchStream, cancelResearch, getHealthCheck, type HealthCheckResponse, type ResearchStreamEvent } from "./services/api";
 
 import SetupView from "./components/SetupView.vue";
 import ProductionView from "./components/ProductionView.vue";
@@ -75,6 +78,8 @@ let waitingInterval: ReturnType<typeof setInterval> | null = null;
 const reportMarkdown = ref("");
 const audioUrl = ref("");
 const podcastBlueprint = ref<PodcastBlueprint | null>(null);
+const healthCheck = ref<HealthCheckResponse | null>(null);
+const healthLoading = ref(false);
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 let abortController: AbortController | null = null;
@@ -108,10 +113,37 @@ function addLog(message: string) {
   });
 }
 
+function buildBackendUnavailableHealth(message: string): HealthCheckResponse {
+  return {
+    status: "error",
+    blocking: true,
+    checks: [
+      {
+        id: "backend",
+        label: "后端服务",
+        status: "error",
+        message
+      }
+    ]
+  };
+}
+
+async function refreshHealthCheck() {
+  healthLoading.value = true;
+  try {
+    healthCheck.value = await getHealthCheck();
+  } catch (err: any) {
+    healthCheck.value = buildBackendUnavailableHealth(err.message || "无法连接后端服务");
+  } finally {
+    healthLoading.value = false;
+  }
+}
+
 // --- Actions ---
 
 async function startProduction() {
   if (!form.topic.trim()) return;
+  if (healthLoading.value || !healthCheck.value || healthCheck.value.blocking) return;
 
   currentView.value = "producing";
   productionStage.value = "research";
@@ -329,25 +361,15 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   if (event.type === "done") {
     addLog("✅ [DONE] 所有任务结束");
     stopWaitingAnimation();
-    productionStage.value = "done";
     progressPercent.value = 100;
 
     if (!podcastReady.value && audioProgress.total > 0) {
-      fetch(`${apiBaseUrl}/api/audio/latest`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.file) {
-            audioUrl.value = `${apiBaseUrl}${data.url}`;
-            podcastReady.value = true;
-            addLog(`🎉 [PODCAST] 找到音频文件: ${data.file}`);
-          } else {
-            addLog(`⚠️ 未找到音频文件: ${data.error || "未知错误"}`);
-          }
-        })
-        .catch(err => {
-          addLog(`⚠️ 获取音频文件失败: ${err.message}`);
-        });
+      productionStage.value = "error";
+      addLog("❌ [PODCAST] 播客合成未完成，未收到可播放音频文件");
+      return;
     }
+
+    productionStage.value = "done";
   }
 }
 
@@ -396,6 +418,10 @@ function downloadReport() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+onMounted(() => {
+  refreshHealthCheck();
+});
 </script>
 
 <style scoped>

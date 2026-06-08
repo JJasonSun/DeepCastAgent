@@ -1,5 +1,7 @@
 """通过 HTTP 暴露 DeepResearchAgent 的 FastAPI 入口点。"""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +9,9 @@ import concurrent.futures
 import glob
 import json
 import os
+import shutil
 import sys
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -80,6 +84,23 @@ class ResearchResponse(BaseModel):
     )
 
 
+class HealthCheckItem(BaseModel):
+    """首页运行前健康检查条目。"""
+
+    id: Literal["backend", "llm", "tts", "search", "ffmpeg", "audio_output"]
+    label: str
+    status: Literal["ok", "warning", "error"]
+    message: str
+
+
+class HealthCheckResponse(BaseModel):
+    """首页运行前健康检查结果。"""
+
+    status: Literal["ok", "warning", "error"]
+    blocking: bool
+    checks: list[HealthCheckItem]
+
+
 def _mask_secret(value: str | None, visible: int = 4) -> str:
     """在保持前导和尾随字符的同时，掩盖敏感令牌。"""
     if not value:
@@ -101,9 +122,145 @@ def _build_config(payload: ResearchRequest | None = None) -> Configuration:
     return Configuration.from_env(overrides)
 
 
+def _check_ffmpeg(config: Configuration) -> HealthCheckItem:
+    configured_path = config.ffmpeg_path
+
+    if configured_path:
+        path = Path(configured_path)
+        if not path.is_absolute():
+            return HealthCheckItem(
+                id="ffmpeg",
+                label="FFmpeg",
+                status="error",
+                message="FFMPEG_PATH 必须配置为绝对路径",
+            )
+        if not path.exists():
+            return HealthCheckItem(
+                id="ffmpeg",
+                label="FFmpeg",
+                status="error",
+                message=f"未找到 FFmpeg 可执行文件：{configured_path}",
+            )
+        if not os.access(path, os.X_OK):
+            return HealthCheckItem(
+                id="ffmpeg",
+                label="FFmpeg",
+                status="error",
+                message=f"FFmpeg 路径不可执行：{configured_path}",
+            )
+        return HealthCheckItem(
+            id="ffmpeg",
+            label="FFmpeg",
+            status="ok",
+            message=f"FFmpeg 可用：{configured_path}",
+        )
+
+    detected_path = shutil.which("ffmpeg")
+    if not detected_path:
+        return HealthCheckItem(
+            id="ffmpeg",
+            label="FFmpeg",
+            status="error",
+            message="未配置 FFMPEG_PATH，系统 PATH 中也未找到 ffmpeg",
+        )
+
+    return HealthCheckItem(
+        id="ffmpeg",
+        label="FFmpeg",
+        status="ok",
+        message=f"FFmpeg 可用：{detected_path}",
+    )
+
+
+def _check_audio_output(config: Configuration) -> HealthCheckItem:
+    output_dir = Path(config.audio_output_dir)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=output_dir, prefix=".healthcheck_", delete=True):
+            pass
+    except Exception as exc:
+        return HealthCheckItem(
+            id="audio_output",
+            label="音频输出目录",
+            status="error",
+            message=f"音频输出目录不可写：{exc}",
+        )
+
+    return HealthCheckItem(
+        id="audio_output",
+        label="音频输出目录",
+        status="ok",
+        message=f"音频输出目录可写：{output_dir}",
+    )
+
+
+def _build_health_response() -> HealthCheckResponse:
+    config = Configuration.from_env()
+
+    checks: list[HealthCheckItem] = [
+        HealthCheckItem(
+            id="backend",
+            label="后端服务",
+            status="ok",
+            message="后端服务已连接",
+        )
+    ]
+
+    checks.append(
+        HealthCheckItem(
+            id="llm",
+            label="LLM 配置",
+            status="ok" if config.llm_api_key else "error",
+            message="LLM_API_KEY 已配置" if config.llm_api_key else "缺少 LLM_API_KEY",
+        )
+    )
+    checks.append(
+        HealthCheckItem(
+            id="tts",
+            label="TTS 配置",
+            status="ok" if config.tts_api_key else "error",
+            message="TTS_API_KEY 已配置" if config.tts_api_key else "缺少 TTS_API_KEY",
+        )
+    )
+
+    search_key_count = int(bool(config.tavily_api_key)) + int(bool(config.serpapi_api_key))
+    if search_key_count == 2:
+        search_status: Literal["ok", "warning", "error"] = "ok"
+        search_message = "Tavily 和 SerpApi 均已配置"
+    elif search_key_count == 1:
+        search_status = "warning"
+        search_message = "仅配置了一个搜索后端，可运行但混合搜索能力不完整"
+    else:
+        search_status = "error"
+        search_message = "缺少搜索 API Key：TAVILY_API_KEY 和 SERPAPI_API_KEY 至少需要一个"
+
+    checks.append(
+        HealthCheckItem(
+            id="search",
+            label="搜索配置",
+            status=search_status,
+            message=search_message,
+        )
+    )
+    checks.append(_check_ffmpeg(config))
+    checks.append(_check_audio_output(config))
+
+    if any(item.status == "error" for item in checks):
+        status: Literal["ok", "warning", "error"] = "error"
+    elif any(item.status == "warning" for item in checks):
+        status = "warning"
+    else:
+        status = "ok"
+
+    return HealthCheckResponse(
+        status=status,
+        blocking=any(item.status == "error" for item in checks),
+        checks=checks,
+    )
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用实例。"""
-
     # 当前活跃的研究 agent 引用，用于支持取消操作
     _active_agent: dict[str, DeepResearchAgent | None] = {"current": None}
 
@@ -153,6 +310,11 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def health_check() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/health", response_model=HealthCheckResponse)
+    def health_detail() -> HealthCheckResponse:
+        """返回首页运行前依赖检查结果，不主动探测外部 API。"""
+        return _build_health_response()
 
     @app.get("/api/audio/latest")
     def get_latest_audio() -> dict[str, Any]:

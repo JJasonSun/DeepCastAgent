@@ -7,6 +7,21 @@ export interface ResearchRequest {
   llm_reasoning_effort?: "high" | "max";
 }
 
+export type HealthStatus = "ok" | "warning" | "error";
+
+export interface HealthCheckItem {
+  id: "backend" | "llm" | "tts" | "search" | "ffmpeg" | "audio_output";
+  label: string;
+  status: HealthStatus;
+  message: string;
+}
+
+export interface HealthCheckResponse {
+  status: HealthStatus;
+  blocking: boolean;
+  checks: HealthCheckItem[];
+}
+
 export type ResearchStreamEvent =
   | { type: "status"; message?: string }
   | { type: "log"; message?: string }
@@ -95,6 +110,20 @@ export async function cancelResearch(): Promise<void> {
   } catch (err) {
     console.warn("Failed to send cancel request:", err);
   }
+}
+
+export async function getHealthCheck(): Promise<HealthCheckResponse> {
+  const response = await fetch(`${baseURL}/api/health`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`健康检查失败，状态码：${response.status}`);
+  }
+
+  return response.json() as Promise<HealthCheckResponse>;
 }
 
 export async function runResearchStream(
