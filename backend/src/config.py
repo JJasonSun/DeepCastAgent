@@ -96,6 +96,11 @@ class Configuration(BaseModel):
         title="TTS 音色设计模型",
         description="通过文本描述自定义音色的 TTS 模型 ID",
     )
+    enable_tts_voice_design: bool = Field(
+        default=False,
+        title="启用 TTS 音色设计",
+        description="是否使用 VoiceDesign 模型；默认使用预置音色以获得更稳定的真人感",
+    )
     audio_output_dir: str = Field(
         default=str(BACKEND_ROOT / "output" / "audio"),
         title="音频输出目录",

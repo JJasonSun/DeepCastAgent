@@ -27,6 +27,19 @@ def _build_config(style: str, output_dir: str) -> Configuration:
     )
 
 
+def _build_audio_service(style: str, output_dir: str, *, enable_voice_design: bool = False) -> AudioGenerationService:
+    config = Configuration.from_env(
+        {
+            "podcast_style": style,
+            "audio_output_dir": output_dir,
+            "llm_api_key": "fake-key",
+            "tts_api_key": "fake-key",
+            "enable_tts_voice_design": enable_voice_design,
+        }
+    )
+    return AudioGenerationService(config)
+
+
 def _assert_style_prompts(output_dir: str) -> None:
     expected = {
         "plain": ["通俗解释", "生活化类比", "复杂问题"],
@@ -41,7 +54,9 @@ def _assert_style_prompts(output_dir: str) -> None:
 
 
 def _assert_tts_consistency(output_dir: str) -> None:
-    service = AudioGenerationService(_build_config("plain", output_dir))
+    service = _build_audio_service("plain", output_dir)
+    assert service._use_voice_design is False
+    assert _build_audio_service("plain", output_dir, enable_voice_design=True)._use_voice_design is True
 
     host_desc = service._get_voice_design_description("Host")
     guest_desc = service._get_voice_design_description("Guest")
@@ -50,14 +65,22 @@ def _assert_tts_consistency(output_dir: str) -> None:
         assert keyword in host_desc
         assert keyword in guest_desc
 
-    host_instruction = service._build_director_instruction("Host", "兴奋地提高音量并语速加快")
+    context = service._build_conversation_context(
+        [
+            {"role": "Host", "content": "这件事为什么重要？"},
+            {"role": "Guest", "content": "因为它会影响后续产品路线。"},
+        ],
+        0,
+    )
+    host_instruction = service._build_director_instruction("Host", "兴奋地提高音量并语速加快", "提高音量", context)
     assert "共同指导" in host_instruction
+    assert "连续对话上下文" in host_instruction
     assert "稍微加强语气" in host_instruction
     assert "节奏略快" in host_instruction
     assert "提高音量" not in host_instruction
 
-    assert AudioGenerationService._embed_audio_tag("内容", "提高音量") == "(轻声强调)内容"
-    assert AudioGenerationService._embed_audio_tag("内容", "语速加快") == "(节奏略快)内容"
+    assert AudioGenerationService._embed_audio_tag("内容", "提高音量") == "[轻声强调]内容"
+    assert AudioGenerationService._embed_audio_tag("内容", "语速加快") == "[节奏略快]内容"
 
 
 def main() -> None:

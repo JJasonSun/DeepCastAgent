@@ -17,6 +17,7 @@ class TestAudioGenerationService(unittest.TestCase):
         self.mock_config.tts_base_url = "http://test.api/tts"
         self.mock_config.tts_model = "test-tts"
         self.mock_config.tts_voice_design_model = "test-tts-voicedesign"
+        self.mock_config.enable_tts_voice_design = False
         self.mock_config.tts_timeout = 300
         self.mock_config.ffmpeg_path = "ffmpeg"
 
@@ -66,7 +67,7 @@ class TestAudioGenerationService(unittest.TestCase):
     def test_embed_audio_tag(self):
         self.assertEqual(
             AudioGenerationService._embed_audio_tag("内容", "轻笑"),
-            "(轻笑)内容"
+            "[轻笑]内容"
         )
         self.assertEqual(
             AudioGenerationService._embed_audio_tag("内容", ""),
@@ -94,8 +95,26 @@ class TestAudioGenerationService(unittest.TestCase):
 
         self.assertEqual(
             AudioGenerationService._embed_audio_tag("内容", "提高音量"),
-            "(轻声强调)内容"
+            "[轻声强调]内容"
         )
+
+    def test_conversation_context(self):
+        script = [
+            {"role": "Host", "content": "我们先从背景说起。"},
+            {"role": "Guest", "content": "这个变化其实和市场结构有关。"},
+            {"role": "Host", "content": "所以影响会落到哪些人身上？"},
+        ]
+        context = AudioGenerationService._build_conversation_context(script, 1)
+        self.assertIn("第 2/3 轮", context)
+        self.assertIn("上一句 Host", context)
+        self.assertIn("下一句将由 Host", context)
+
+    def test_voice_design_is_opt_in(self):
+        self.assertFalse(self.service._use_voice_design)
+        self.mock_config.enable_tts_voice_design = True
+        with patch('pathlib.Path.mkdir'):
+            service = AudioGenerationService(self.mock_config)
+        self.assertTrue(service._use_voice_design)
 
 
 if __name__ == '__main__':

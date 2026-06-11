@@ -63,7 +63,7 @@ class AudioGenerationService:
         self._config = config
         self._output_dir = Path(config.audio_output_dir)
         self._ensure_output_dir()
-        self._use_voice_design = bool(config.tts_voice_design_model)
+        self._use_voice_design = bool(config.enable_tts_voice_design and config.tts_voice_design_model)
 
     def _ensure_output_dir(self) -> None:
         if not self._output_dir.exists():
@@ -103,10 +103,11 @@ class AudioGenerationService:
 
             file_name = f"{task_id}_{index:03d}_{role}.wav"
             file_path = self._output_dir / file_name
+            conversation_context = self._build_conversation_context(script, index)
 
             logger.info("[TTS %d/%d] %s: %s (emotion=%s)", index + 1, total, role, content[:20], emotion)
 
-            if self._call_tts_api(content, role, emotion, audio_tag, file_path):
+            if self._call_tts_api(content, role, emotion, audio_tag, file_path, conversation_context):
                 generated_files.append(str(file_path))
                 logger.info("[TTS %d/%d] %s 语音生成成功", index + 1, total, role)
 
@@ -126,7 +127,13 @@ class AudioGenerationService:
 
     # ── 导演模式 style 指令构建 ────────────────────────────────────
 
-    def _build_director_instruction(self, role: str, emotion: str) -> str:
+    def _build_director_instruction(
+        self,
+        role: str,
+        emotion: str,
+        audio_tag: str = "",
+        conversation_context: str = "",
+    ) -> str:
         """构建导演模式三段式 style 指令（角色/场景/指导）。"""
         if self._is_guest_role(role):
             character_scene = self._DIRECTOR_GUEST
@@ -149,7 +156,44 @@ class AudioGenerationService:
         else:
             direction = default_direction
 
-        return f"{character_scene}\n\n{self._DIRECTOR_SHARED_GUIDANCE}\n\n{direction}"
+        tag_instruction = ""
+        if audio_tag:
+            normalized_tag = self._normalize_audio_tag(audio_tag)
+            if normalized_tag:
+                tag_instruction = f"\n细节：可轻微体现“{normalized_tag}”的口播效果，但不要把标签念出来。"
+
+        context_instruction = ""
+        if conversation_context:
+            context_instruction = f"\n\n连续对话上下文：{conversation_context}"
+
+        return f"{character_scene}\n\n{self._DIRECTOR_SHARED_GUIDANCE}\n\n{direction}{tag_instruction}{context_instruction}"
+
+    @staticmethod
+    def _build_conversation_context(script: list[dict[str, str]], index: int) -> str:
+        """为逐句 TTS 提供轻量前后文，减少单句合成的割裂感。"""
+        context_parts = [f"当前是第 {index + 1}/{len(script)} 轮。"]
+        if index > 0:
+            prev = script[index - 1]
+            prev_role = prev.get("role", "上一位说话者")
+            prev_content = prev.get("content", "")
+            if prev_content:
+                context_parts.append(f"上一句 {prev_role} 刚说：{AudioGenerationService._preview_text(prev_content)}")
+        if index + 1 < len(script):
+            next_turn = script[index + 1]
+            next_role = next_turn.get("role", "下一位说话者")
+            next_content = next_turn.get("content", "")
+            if next_content:
+                context_parts.append(f"下一句将由 {next_role} 接：{AudioGenerationService._preview_text(next_content)}")
+        context_parts.append("请保持承接上一句的自然口播节奏，像连续录制而不是单句朗读。")
+        return " ".join(context_parts)
+
+    @staticmethod
+    def _preview_text(text: str, limit: int = 42) -> str:
+        """生成对话上下文中的短文本预览。"""
+        normalized = " ".join(text.split())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[:limit] + "..."
 
     # ── 音频标签嵌入 ──────────────────────────────────────────────
 
@@ -159,7 +203,7 @@ class AudioGenerationService:
         if audio_tag:
             normalized_tag = AudioGenerationService._normalize_audio_tag(audio_tag)
             if normalized_tag:
-                return f"({normalized_tag}){content}"
+                return f"[{normalized_tag}]{content}"
         return content
 
     @staticmethod
@@ -232,6 +276,7 @@ class AudioGenerationService:
         emotion: str,
         audio_tag: str,
         output_path: Path,
+        conversation_context: str = "",
     ) -> bool:
         """调用 MiMo TTS API 并保存音频文件。"""
         if output_path.exists():
@@ -246,10 +291,10 @@ class AudioGenerationService:
             )
 
             # 构建导演模式 style 指令
-            style_instruction = self._build_director_instruction(role, emotion)
+            style_instruction = self._build_director_instruction(role, emotion, audio_tag, conversation_context)
 
-            # 嵌入音频标签到文本
-            tts_text = self._embed_audio_tag(text, audio_tag)
+            # 预置音色支持音频标签；VoiceDesign 不支持，标签只进入导演模式 context。
+            tts_text = text if self._use_voice_design else self._embed_audio_tag(text, audio_tag)
 
             # 构建 messages
             messages = [
