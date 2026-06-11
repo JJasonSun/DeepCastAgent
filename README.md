@@ -212,11 +212,17 @@ python scripts/verify_ffmpeg.py         # 检查 FFmpeg
 python scripts/verify_search.py         # 测试搜索 API
 ```
 
+## 开源记录
+
+DeepCast 的早期版本曾作为毕业设计项目合并至 DataWhale hello-agents 开源社区：
+[PR #374: DeepCast - 深度调研 AI 播客生成 Agent](https://github.com/datawhalechina/hello-agents/pull/374)。
+
+当前仓库是在该早期版本基础上的独立迭代版，后续重点升级了 DeepSeek 模型调用、MiMo-V2.5-TTS 语音合成、节目蓝图、报告 Self-Refine、多 Agent 编排、SSE 进度体验和稳定性兜底机制。
+
 ## 相关文档
 
-- [JD.md](docs/JD.md)：AI 产品经理相关岗位要求汇总，用于作品集和简历叙事对齐。
-- [豆包语音播客.md](docs/豆包语音播客.md)：豆包语音播客模型能力摘要。
-- [豆包播客竞品分析.md](docs/豆包播客竞品分析.md)：围绕豆包语音播客、NotebookLM、ElevenLabs 等产品的竞品分析。
+- [AI 语音播客竞品分析：豆包语音播客与 DeepCast](docs/豆包播客竞品分析.md)
+- [DeepCast 产品需求文档 PRD](docs/DeepCast_PRD.md)
 
 ## 项目结构
 
