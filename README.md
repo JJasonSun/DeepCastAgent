@@ -20,8 +20,15 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 ## 产品 Demo
 
-<!-- TODO: 替换为实际截图/GIF -->
-<!-- ![产品流程](docs/demo-flow.gif) -->
+<img src="docs/output.gif" alt="DeepCast 生成流程演示" width="760">
+
+**输入主题：**
+
+<img src="docs/输入页面.png" alt="DeepCast 输入页面" width="640">
+
+**播放与报告阅读：**
+
+<img src="docs/播放器+报告界面.png" alt="DeepCast 播放器与报告界面" width="640">
 
 **当前定位：** DeepCast 目前是面向作品集展示的单用户本地 Demo，重点验证“主题输入 → 深度研究 → 报告 → 播客脚本 → 语音合成”的端到端 Agent 工作流。多用户任务隔离、线上队列、完整埋点和留存分析暂未作为当前版本实现目标，已放入后续产品化路线。
 
@@ -82,25 +89,25 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
 
 **决策：** 将任务拆解为专业 Agent 协同：PlannerAgent（拆解子任务 + 信息增益分析）→ ResearcherAgent（混合搜索 + LLM 过滤 + 域名权威性排序 + 摘要）→ WriterAgent（报告撰写 / 修改 / 脚本生成）→ CriticAgent（报告质量评估）→ AudioGenerationService（TTS 合成）。主链路通过 DirectorAgent 注册和分派各 Agent，DeepResearchAgent 负责阶段编排、并发执行和 SSE 输出。
 
-### 7. 迭代式深度搜索 + 智能终止
+### 6. 迭代式深度搜索 + 智能终止
 
 **问题：** 单轮搜索无法覆盖复杂主题的所有维度，信息深度不足。
 
 **决策：** 初始任务完成后，LLM 自动进行递归反思：总结已有覆盖、列出知识缺口、制定下一轮搜索策略和优先来源类型，再生成补充搜索任务，迭代至信息饱和。同时引入定量信息增益指标——基于关键词重叠度计算信息重复度，超过阈值自动终止，避免无效搜索浪费成本。搜索模式仍保持 Tavily + SerpApi 混合搜索。
 
-### 8. 报告大纲 + Self-Refine 质量闭环
+### 7. 报告大纲 + Self-Refine 质量闭环
 
 **问题：** 单次 LLM 生成的报告质量不稳定，缺乏自我纠错能力。
 
 **决策：** 正式写作前先生成结构化报告大纲，明确读者问题、核心主线、章节论点、证据需求和来源风险；报告初稿生成后，Critic Agent 再从逻辑严谨性、数据支撑度、专业性、引用可信度等维度评估质量并给出结构化反馈，Writer Agent 据此修改。形成"大纲 → 初稿 → 批判 → 修改"的质量闭环。
 
-### 9. 可选：专题系列记忆复用
+### 8. 可选：专题系列记忆复用
 
 **问题：** 对单次主题生成 Demo 来说，历史记忆不是主链路刚需；但如果做同一领域的系列节目，复用历史研究发现可以减少重复搜索。
 
 **决策：** 保留 MemoryManager 作为可选扩展，但默认关闭（`ENABLE_MEMORY=False`）。开启后，系统会在研究完成后提取关键发现（实体、关键词、结论）持久化为结构化记忆，并在后续同主题研究前检索相关记忆注入规划 prompt。
 
-### 6. 导演模式拟人语音（情感化 TTS）
+### 9. 导演模式拟人语音（情感化 TTS）
 
 **问题：** AI 播客的语音像机器人朗读——每句台词用同样的语调、同样的节奏，缺乏情感变化和对话感，听众很快流失。
 
@@ -196,6 +203,8 @@ npm install
 npm run dev                       # 访问 http://localhost:5174
 ```
 
+启动后端后，可访问 `GET /api/health` 查看本地前置健康检查。该接口只检查本地运行必需项，包括 LLM/TTS/Search API Key 是否配置、FFmpeg 是否可用、音频输出目录是否可写；前端会据此判断是否允许开始生成，避免任务启动后才暴露缺配置问题。
+
 **关键环境变量：**
 - `LLM_API_KEY` / `LLM_BASE_URL`：大语言模型 API
 - `TTS_API_KEY` / `TTS_BASE_URL`：语音合成 API
@@ -204,12 +213,24 @@ npm run dev                       # 访问 http://localhost:5174
 
 ### 验证脚本
 
+外部服务连通性验证：
+
 ```bash
 cd backend
-python scripts/verify_llm.py            # 验证 LLM 连通性
-python scripts/verify_mimo_tts.py       # 验证 TTS 服务
-python scripts/verify_ffmpeg.py         # 检查 FFmpeg
-python scripts/verify_search.py         # 测试搜索 API
+uv run python scripts/verify_llm.py            # 验证 LLM 连通性
+uv run python scripts/verify_mimo_tts.py       # 验证 TTS 服务
+uv run python scripts/verify_ffmpeg.py         # 检查 FFmpeg
+uv run python scripts/verify_search.py         # 测试搜索 API
+```
+
+离线稳定性验证：
+
+```bash
+cd backend
+uv run python scripts/verify_llm_empty_retry.py       # 验证 LLM 空 content 重试
+uv run python scripts/verify_intro_bgm.py             # 验证片头 BGM 拼接
+uv run python scripts/verify_script_json_schema.py    # 验证播客脚本 JSON 结构
+uv run python scripts/verify_report_failure_guard.py  # 验证报告失败不进入音频链路
 ```
 
 ## 开源记录
