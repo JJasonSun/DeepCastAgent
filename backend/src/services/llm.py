@@ -21,8 +21,14 @@ logger = logging.getLogger(__name__)
 RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
+class EmptyLLMResponseError(RuntimeError):
+    """LLM 请求成功但返回了空 content，适合作为临时失败重试。"""
+
+
 def is_retryable_api_error(exc: Exception) -> bool:
     """判断 OpenAI 兼容 API 异常是否适合重试。"""
+    if isinstance(exc, EmptyLLMResponseError):
+        return True
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
     if isinstance(exc, APIStatusError):
@@ -214,13 +220,29 @@ def call_llm(
         request_args["tool_choice"] = tool_choice
 
     request_args = _compact_request_args(request_args)
-    response = run_with_retry(
-        lambda: client.chat.completions.create(**request_args),
-        operation_name=f"LLM completion ({model})",
-        max_retries=max_retries,
-        retry_base_delay=retry_base_delay,
-    )
-    return response.choices[0].message.content or ""
+    def create_completion() -> str:
+        response = client.chat.completions.create(**request_args)
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        if not content.strip():
+            logger.warning(
+                "LLM completion (%s) returned empty content (finish_reason=%s)",
+                model,
+                getattr(choice, "finish_reason", None),
+            )
+            raise EmptyLLMResponseError("LLM completion returned empty content")
+        return content
+
+    try:
+        return run_with_retry(
+            create_completion,
+            operation_name=f"LLM completion ({model})",
+            max_retries=max_retries,
+            retry_base_delay=retry_base_delay,
+        )
+    except EmptyLLMResponseError:
+        logger.error("LLM completion (%s) returned empty content after retries", model)
+        return ""
 
 
 def call_llm_json(
@@ -258,14 +280,28 @@ def call_llm_json(
         request_args["temperature"] = temperature
 
     request_args = _compact_request_args(request_args)
-    response = run_with_retry(
-        lambda: client.chat.completions.create(**request_args),
-        operation_name=f"LLM JSON completion ({model})",
-        max_retries=max_retries,
-        retry_base_delay=retry_base_delay,
-    )
-    content = response.choices[0].message.content
-    if not content:
+    def create_json_completion() -> str:
+        response = client.chat.completions.create(**request_args)
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        if not content.strip():
+            logger.warning(
+                "LLM JSON completion (%s) returned empty content (finish_reason=%s)",
+                model,
+                getattr(choice, "finish_reason", None),
+            )
+            raise EmptyLLMResponseError("LLM JSON completion returned empty content")
+        return content
+
+    try:
+        content = run_with_retry(
+            create_json_completion,
+            operation_name=f"LLM JSON completion ({model})",
+            max_retries=max_retries,
+            retry_base_delay=retry_base_delay,
+        )
+    except EmptyLLMResponseError:
+        logger.error("LLM JSON completion (%s) returned empty content after retries", model)
         return None
     try:
         parsed = json.loads(content)

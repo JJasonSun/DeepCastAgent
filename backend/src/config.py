@@ -101,6 +101,31 @@ class Configuration(BaseModel):
         title="音频输出目录",
         description="保存生成的音频文件的目录",
     )
+    enable_intro_bgm: bool = Field(
+        default=True,
+        title="启用片头 BGM",
+        description="是否在最终播客开头叠加短背景音乐",
+    )
+    intro_bgm_path: str | None = Field(
+        default=str(BACKEND_ROOT / "assets" / "audio" / "intro_bgm.mp3"),
+        title="片头 BGM 路径",
+        description="用于播客开头的短背景音乐文件路径",
+    )
+    intro_bgm_duration_ms: int = Field(
+        default=8000,
+        title="片头 BGM 时长",
+        description="片头背景音乐使用的最大时长（毫秒）",
+    )
+    intro_bgm_gain_db: float = Field(
+        default=-21.0,
+        title="片头 BGM 音量",
+        description="叠加到人声下方时对 BGM 应用的增益（dB）",
+    )
+    intro_bgm_lead_in_ms: int = Field(
+        default=400,
+        title="片头留白",
+        description="在第一句人声前加入的片头留白时长（毫秒）",
+    )
     ffmpeg_path: str | None = Field(
         default=None,
         title="FFmpeg 路径",
@@ -217,9 +242,9 @@ class Configuration(BaseModel):
         description="精炼阶段的信息重复度上限（0-1），超过此值则终止深度搜索（0.8 表示 80% 重复）",
     )
 
-    @field_validator("notes_workspace", "audio_output_dir")
+    @field_validator("notes_workspace", "audio_output_dir", "intro_bgm_path")
     @classmethod
-    def resolve_path(cls, v: str) -> str:
+    def resolve_path(cls, v: str | None) -> str | None:
         """确保路径是绝对路径，如果是相对路径则基于 BACKEND_ROOT 解析。"""
         if v is None:
             return v

@@ -81,6 +81,7 @@ class PodcastSynthesisService:
                 logger.error("No valid audio segments to combine.")
                 return None
 
+            combined = self._apply_intro_bgm(combined)
             output_filename = f"podcast_{task_id}.mp3"
             output_path = self._output_dir / output_filename
             
@@ -93,3 +94,29 @@ class PodcastSynthesisService:
         except Exception as e:
             logger.exception("Podcast synthesis failed: %s", e)
             return None
+
+    def _apply_intro_bgm(self, audio: AudioSegment) -> AudioSegment:
+        """在播客开头添加短 BGM，淡出后再进入人声。"""
+        if not self._config.enable_intro_bgm or not self._config.intro_bgm_path:
+            return audio
+
+        bgm_path = Path(self._config.intro_bgm_path)
+        if not bgm_path.exists():
+            logger.warning("Intro BGM file not found: %s", bgm_path)
+            return audio
+
+        try:
+            duration_ms = max(0, self._config.intro_bgm_duration_ms)
+            lead_in_ms = max(0, self._config.intro_bgm_lead_in_ms)
+            bgm = AudioSegment.from_file(bgm_path)
+            if duration_ms > 0:
+                bgm = bgm[:duration_ms]
+            bgm = bgm + self._config.intro_bgm_gain_db
+            bgm = bgm.fade_in(min(400, len(bgm))).fade_out(min(1200, len(bgm)))
+
+            if lead_in_ms > 0:
+                bgm += AudioSegment.silent(duration=lead_in_ms)
+            return bgm + audio
+        except Exception as e:
+            logger.warning("Failed to apply intro BGM %s: %s", bgm_path, e)
+            return audio
