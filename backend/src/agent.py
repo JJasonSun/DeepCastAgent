@@ -844,22 +844,25 @@ class DeepResearchAgent:
                 "blueprint": blueprint,
             },
         )
-        script = script_result.data.get("script", []) if script_result.success else []
+        if not script_result.success:
+            raise RuntimeError("脚本生成失败：模型未返回合法播客脚本，已停止后续音频生成。")
+
+        script = script_result.data.get("script", [])
         if self.is_cancelled():
             return
         yield from self._drain_tool_events(state)
         state.podcast_script = script
 
         script_turns = len(script) if script else 0
+        if script_turns == 0:
+            raise RuntimeError("脚本生成失败：模型返回空脚本，已停止后续音频生成。")
+
         yield {"type": "log", "message": f"脚本生成完成，共 {script_turns} 轮对话"}
         yield {
             "type": "podcast_script",
             "script": script,
             "turns": script_turns,
         }
-
-        if script_turns == 0:
-            yield {"type": "log", "message": "警告：脚本为空，跳过音频生成"}
 
         return script_turns  # type: ignore[return-value]
 
