@@ -20,6 +20,16 @@ from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
 REPORT_GENERATION_FAILURE_MESSAGE = "报告生成失败，请检查输入。"
+REPORT_DELIVERY_PREAMBLE_MARKERS = (
+    "好的，作为",
+    "我已将",
+    "我已根据",
+    "现基于",
+    "提交以下",
+    "以下是",
+    "为您",
+    "我将",
+)
 
 
 def is_report_generation_failure(report: str | None) -> bool:
@@ -198,6 +208,7 @@ class ReportingService:
             report_text = strip_thinking_tokens(report_text)
 
         report_text = strip_tool_calls(report_text).strip()
+        report_text = self._strip_report_delivery_preamble(report_text)
 
         if not report_text:
             logger.error("Report generation returned empty text.")
@@ -207,6 +218,79 @@ class ReportingService:
         """生成可供用户确认的报告大纲。"""
         tasks_context = self._build_tasks_context(state)
         return self._generate_report_outline(state, tasks_context)
+
+    @staticmethod
+    def _strip_report_delivery_preamble(report_text: str) -> str:
+        """移除模型在报告正文前追加的交付说明。"""
+        text = report_text.strip()
+        if not text:
+            return text
+
+        lines = text.splitlines()
+        first_heading_index = ReportingService._find_next_heading(lines, 0)
+        if first_heading_index < 0:
+            return text
+
+        if first_heading_index > 0:
+            leading_text = "\n".join(line.strip() for line in lines[:first_heading_index] if line.strip())
+            if not ReportingService._looks_like_delivery_preamble(leading_text):
+                return text
+            lines = lines[first_heading_index:]
+
+        preamble_start = ReportingService._first_non_empty_index(lines, 1)
+        if preamble_start is None or lines[preamble_start].lstrip().startswith("#"):
+            return "\n".join(lines).strip()
+
+        preamble_end = preamble_start
+        while preamble_end < len(lines):
+            line = lines[preamble_end].strip()
+            if not line or line.startswith("#") or ReportingService._is_horizontal_rule(line):
+                break
+            preamble_end += 1
+
+        preamble_text = "\n".join(line.strip() for line in lines[preamble_start:preamble_end])
+        if not ReportingService._looks_like_delivery_preamble(preamble_text):
+            return "\n".join(lines).strip()
+
+        remove_end = preamble_end
+        while remove_end < len(lines) and not lines[remove_end].strip():
+            remove_end += 1
+        if remove_end < len(lines) and ReportingService._is_horizontal_rule(lines[remove_end].strip()):
+            remove_end += 1
+        while remove_end < len(lines) and not lines[remove_end].strip():
+            remove_end += 1
+
+        cleaned_lines = lines[:preamble_start] + lines[remove_end:]
+        return "\n".join(cleaned_lines).strip()
+
+    @staticmethod
+    def _find_next_heading(lines: list[str], start: int) -> int:
+        """查找下一行 Markdown 标题。"""
+        for index in range(start, len(lines)):
+            if lines[index].lstrip().startswith("#"):
+                return index
+        return -1
+
+    @staticmethod
+    def _first_non_empty_index(lines: list[str], start: int) -> int | None:
+        """查找下一行非空内容。"""
+        for index in range(start, len(lines)):
+            if lines[index].strip():
+                return index
+        return None
+
+    @staticmethod
+    def _is_horizontal_rule(line: str) -> bool:
+        """判断一行是否是 Markdown 分隔线。"""
+        stripped = line.strip()
+        return stripped in {"---", "***", "___"}
+
+    @staticmethod
+    def _looks_like_delivery_preamble(text: str) -> bool:
+        """判断文本是否像模型交付说明，而不是报告正文。"""
+        if not text:
+            return False
+        return any(marker in text for marker in REPORT_DELIVERY_PREAMBLE_MARKERS)
 
     def _build_tasks_context(self, state: SummaryState) -> str:
         """构建报告写作所需的任务上下文。"""
@@ -479,5 +563,6 @@ class ReportingService:
             refined_text = strip_thinking_tokens(refined_text)
 
         refined_text = strip_tool_calls(refined_text).strip()
+        refined_text = self._strip_report_delivery_preamble(refined_text)
 
         return refined_text or report
