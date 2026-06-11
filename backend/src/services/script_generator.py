@@ -193,8 +193,21 @@ class ScriptGenerationService:
                 "</PODCAST_BLUEPRINT>\n\n"
             )
 
+        length_block = (
+            "<SCRIPT_LENGTH_REQUIREMENT>\n"
+            f"本期播客目标为约 {self._config.podcast_script_target_turns} 轮双人对话。"
+            "请围绕核心信息取舍内容，避免为了凑长度加入空泛寒暄。\n"
+            "</SCRIPT_LENGTH_REQUIREMENT>\n\n"
+        )
+        style_block = (
+            "<PODCAST_STYLE_REQUIREMENT>\n"
+            f"{self._build_style_instruction()}\n"
+            "</PODCAST_STYLE_REQUIREMENT>\n\n"
+        )
         user_prompt = (
             f"{blueprint_block}"
+            f"{length_block}"
+            f"{style_block}"
             f"<RESEARCH_REPORT>\n{state.structured_report}\n</RESEARCH_REPORT>"
         )
         try:
@@ -253,6 +266,15 @@ class ScriptGenerationService:
         except Exception as e:
             logger.error("Script generation failed: %s", e)
             return []
+
+    def _build_style_instruction(self) -> str:
+        """根据用户选择生成播客风格约束。"""
+        style_instructions = {
+            "plain": "采用通俗解释风格：少用术语，多用生活化类比，适合泛知识听众在通勤或运动时理解。",
+            "professional": "采用专业分析风格：保留关键概念和判断链路，提高信息密度，适合希望快速掌握结构化洞察的听众。",
+            "news": "采用新闻播报风格：节奏更快，优先交代事实、进展和影响，减少闲聊式铺垫。",
+        }
+        return style_instructions.get(self._config.podcast_style, style_instructions["plain"])
 
     def _generate_blueprint(self, report: str) -> dict | None:
         """先生成节目蓝图，用于约束后续对话脚本的结构和节奏。"""

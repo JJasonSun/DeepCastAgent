@@ -8,17 +8,17 @@
 
     <div class="w-full max-w-xl relative z-10">
       <!-- Brand -->
-      <div class="text-center mb-10">
-        <div class="inline-flex items-center justify-center w-20 h-20 rounded-[22px] bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 shadow-2xl shadow-blue-500/20 mb-6 ring-1 ring-white/10">
-          <span class="text-4xl">🎙️</span>
+      <div class="text-center mb-7">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-[18px] bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 shadow-2xl shadow-blue-500/20 mb-4 ring-1 ring-white/10">
+          <span class="text-3xl">🎙️</span>
         </div>
-        <h1 class="text-5xl font-bold mb-3 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 tracking-tight">DeepCast</h1>
+        <h1 class="text-4xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 tracking-tight">DeepCast</h1>
         <p class="text-base text-gray-400 font-light">进行深度研究并转化为引人入胜的播客</p>
       </div>
 
       <!-- Main Card -->
       <div class="setup-card rounded-2xl">
-        <form @submit.prevent="submitForm" class="p-7">
+        <form @submit.prevent="submitForm" class="p-5 md:p-6">
           <!-- Health check -->
           <div class="health-card mb-5" :class="healthCardClass">
             <div class="health-card-head">
@@ -29,17 +29,27 @@
                 <p class="health-title">{{ healthTitle }}</p>
                 <p class="health-subtitle">{{ healthSubtitle }}</p>
               </div>
-              <button
-                type="button"
-                class="health-refresh"
-                :disabled="healthLoading"
-                @click="$emit('refreshHealth')"
-              >
-                {{ healthLoading ? "检查中" : "重新检查" }}
-              </button>
+              <div class="health-actions">
+                <button
+                  type="button"
+                  class="health-refresh"
+                  :disabled="healthLoading"
+                  @click="$emit('refreshHealth')"
+                >
+                  {{ healthLoading ? "检查中" : "重新检查" }}
+                </button>
+                <button
+                  type="button"
+                  class="health-detail-toggle"
+                  :aria-expanded="showHealthDetails"
+                  @click="showHealthDetails = !showHealthDetails"
+                >
+                  {{ showHealthDetails ? "收起" : "详情" }}
+                </button>
+              </div>
             </div>
 
-            <ul v-if="visibleChecks.length > 0" class="health-list" aria-label="运行环境检查结果">
+            <ul v-if="showHealthDetails && visibleChecks.length > 0" class="health-list" aria-label="运行环境检查结果">
               <li
                 v-for="item in visibleChecks"
                 :key="item.id"
@@ -48,7 +58,7 @@
               >
                 <span class="health-item-dot"></span>
                 <span class="health-item-label">{{ item.label }}</span>
-                <span class="health-item-message">{{ item.message }}</span>
+                <span class="health-item-message" :title="item.message">{{ formatHealthMessage(item.message) }}</span>
               </li>
             </ul>
           </div>
@@ -65,61 +75,75 @@
               class="setup-textarea"
               placeholder="请输入播客主题（例如：AI Agent 的发展趋势）"
               required
-              rows="4"
+              rows="3"
               aria-label="播客主题输入"
               @keydown.enter.prevent="submitForm"
             ></textarea>
           </div>
 
-          <!-- Model controls -->
-          <div class="setup-controls mb-5">
-            <div class="setup-control-row">
-              <div>
-                <label class="setup-control-label">模型</label>
+          <!-- Generation controls -->
+          <div class="control-panel mb-5">
+            <div class="control-group">
+              <div class="control-group-head">
+                <span class="control-title">搜索深度</span>
+                <span class="control-desc">深度搜索会在报告大纲处暂停确认</span>
               </div>
-              <div class="setup-segmented" role="radiogroup" aria-label="模型选择">
-                <button
-                  type="button"
-                  class="setup-segment"
-                  :class="{ active: modelId === 'deepseek-v4-flash' }"
-                  @click="modelId = 'deepseek-v4-flash'"
-                >
-                  Flash
+              <div class="setup-segmented" role="radiogroup" aria-label="搜索深度">
+                <button type="button" class="setup-segment" :class="{ active: searchDepth === 'quick' }" @click="searchDepth = 'quick'">
+                  快速
                 </button>
-                <button
-                  type="button"
-                  class="setup-segment"
-                  :class="{ active: modelId === 'deepseek-v4-pro' }"
-                  @click="modelId = 'deepseek-v4-pro'"
-                >
-                  Pro
+                <button type="button" class="setup-segment" :class="{ active: searchDepth === 'deep' }" @click="searchDepth = 'deep'">
+                  深度
                 </button>
               </div>
             </div>
 
-            <div class="setup-control-row">
-              <div>
-                <label class="setup-control-label">推理深度</label>
+            <div class="control-group">
+              <div class="control-group-head">
+                <span class="control-title">播客时长</span>
+                <span class="control-desc">控制脚本目标轮次</span>
               </div>
-              <div class="setup-segmented" role="radiogroup" aria-label="推理深度">
-                <button
-                  type="button"
-                  class="setup-segment"
-                  :class="{ active: reasoningEffort === 'high' }"
-                  @click="reasoningEffort = 'high'"
-                >
-                  High
+              <div class="setup-segmented setup-segmented--three" role="radiogroup" aria-label="播客时长">
+                <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'short' }" @click="podcastDuration = 'short'">
+                  短
                 </button>
-                <button
-                  type="button"
-                  class="setup-segment"
-                  :class="{ active: reasoningEffort === 'max' }"
-                  @click="reasoningEffort = 'max'"
-                >
-                  Max
+                <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'standard' }" @click="podcastDuration = 'standard'">
+                  标准
+                </button>
+                <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'deep' }" @click="podcastDuration = 'deep'">
+                  深度
                 </button>
               </div>
             </div>
+
+            <div class="control-group">
+              <div class="control-group-head">
+                <span class="control-title">播客风格</span>
+                <span class="control-desc">影响讲述方式和信息密度</span>
+              </div>
+              <div class="setup-segmented setup-segmented--three" role="radiogroup" aria-label="播客风格">
+                <button type="button" class="setup-segment" :class="{ active: podcastStyle === 'plain' }" @click="podcastStyle = 'plain'">
+                  通俗解释
+                </button>
+                <button type="button" class="setup-segment" :class="{ active: podcastStyle === 'professional' }" @click="podcastStyle = 'professional'">
+                  专业分析
+                </button>
+                <button type="button" class="setup-segment" :class="{ active: podcastStyle === 'news' }" @click="podcastStyle = 'news'">
+                  新闻播报
+                </button>
+              </div>
+            </div>
+
+            <label class="bgm-switch-row">
+              <span>
+                <strong>片头 BGM</strong>
+                <small>只在开头短暂进入，随后淡出到人声。</small>
+              </span>
+              <span class="bgm-switch" :class="{ active: enableIntroBgm }">
+                <input v-model="enableIntroBgm" type="checkbox" aria-label="启用片头 BGM" />
+                <span class="bgm-switch-thumb"></span>
+              </span>
+            </label>
           </div>
 
           <!-- Feature badges -->
@@ -157,12 +181,14 @@
 </template>
 
 <script lang="ts" setup>
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { HealthCheckItem, HealthCheckResponse, HealthStatus } from "../services/api";
 
 const topic = defineModel<string>("topic", { required: true });
-const modelId = defineModel<"deepseek-v4-flash" | "deepseek-v4-pro">("modelId", { required: true });
-const reasoningEffort = defineModel<"high" | "max">("reasoningEffort", { required: true });
+const searchDepth = defineModel<"quick" | "deep">("searchDepth", { required: true });
+const podcastDuration = defineModel<"short" | "standard" | "deep">("podcastDuration", { required: true });
+const podcastStyle = defineModel<"plain" | "professional" | "news">("podcastStyle", { required: true });
+const enableIntroBgm = defineModel<boolean>("enableIntroBgm", { required: true });
 
 const props = defineProps<{
   healthCheck: HealthCheckResponse | null;
@@ -173,6 +199,18 @@ const emit = defineEmits<{
   start: [topic: string];
   refreshHealth: [];
 }>();
+
+const showHealthDetails = ref(false);
+
+watch(
+  () => props.healthCheck,
+  health => {
+    if (health?.blocking || health?.status === "error") {
+      showHealthDetails.value = true;
+    }
+  },
+  { immediate: true }
+);
 
 const healthStatus = computed<HealthStatus>(() => {
   if (props.healthLoading) return "warning";
@@ -222,6 +260,11 @@ const canSubmit = computed(() => {
 function submitForm() {
   if (!canSubmit.value) return;
   emit("start", topic.value);
+}
+
+function formatHealthMessage(message: string) {
+  if (message.length <= 56) return message;
+  return `${message.slice(0, 53)}...`;
 }
 </script>
 
@@ -282,8 +325,8 @@ function submitForm() {
 /* ── Textarea ── */
 .setup-textarea {
   width: 100%;
-  min-height: 110px;
-  padding: 14px 16px;
+  min-height: 94px;
+  padding: 13px 15px;
   border-radius: 12px;
   font-size: 15px;
   line-height: 1.6;
@@ -306,7 +349,7 @@ function submitForm() {
 
 /* ── Health Check ── */
 .health-card {
-  padding: 14px;
+  padding: 11px 12px;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -326,11 +369,11 @@ function submitForm() {
 .health-card-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .health-status-mark {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -361,10 +404,17 @@ function submitForm() {
 .health-subtitle {
   margin: 2px 0 0;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.35;
   color: #9ca3af;
 }
-.health-refresh {
+.health-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+.health-refresh,
+.health-detail-toggle {
   min-height: 30px;
   padding: 0 10px;
   border-radius: 8px;
@@ -376,7 +426,13 @@ function submitForm() {
   cursor: pointer;
   transition: all 0.2s ease;
 }
-.health-refresh:hover:not(:disabled) {
+.health-detail-toggle {
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+}
+.health-refresh:hover:not(:disabled),
+.health-detail-toggle:hover {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.09);
 }
@@ -386,17 +442,17 @@ function submitForm() {
 }
 .health-list {
   display: grid;
-  gap: 7px;
-  margin: 12px 0 0;
+  gap: 5px;
+  margin: 10px 0 0;
   padding: 0;
   list-style: none;
 }
 .health-item {
   display: grid;
-  grid-template-columns: 8px minmax(76px, 0.7fr) minmax(0, 1.3fr);
+  grid-template-columns: 8px minmax(70px, 0.55fr) minmax(0, 1.45fr);
   align-items: center;
   gap: 8px;
-  min-height: 24px;
+  min-height: 22px;
   font-size: 12px;
   color: #9ca3af;
 }
@@ -424,22 +480,97 @@ function submitForm() {
   overflow-wrap: anywhere;
 }
 
-/* ── Model Controls ── */
-.setup-controls {
+/* ── Generation Controls ── */
+.control-panel {
   display: grid;
-  gap: 10px;
+  gap: 9px;
 }
-.setup-control-row {
+.control-group,
+.bgm-switch-row {
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.control-group {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 12px;
+}
+.control-group-head {
+  min-width: 0;
+}
+.control-title {
+  display: block;
+  color: #e5e7eb;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 800;
+}
+.control-desc {
+  display: block;
+  margin-top: 3px;
+  color: #7d8796;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.bgm-switch-row {
+  min-height: 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
 }
-.setup-control-label {
+.bgm-switch-row strong {
   display: block;
+  color: #e5e7eb;
   font-size: 13px;
-  font-weight: 600;
-  color: #d1d5db;
+  line-height: 1.3;
+}
+.bgm-switch-row small {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+.bgm-switch {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35);
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.bgm-switch.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(124, 58, 237, 0.95));
+  border-color: rgba(147, 197, 253, 0.45);
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.22);
+}
+.bgm-switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.bgm-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s ease;
+}
+.bgm-switch.active .bgm-switch-thumb {
+  transform: translateX(20px);
 }
 .setup-segmented {
   display: grid;
@@ -450,9 +581,12 @@ function submitForm() {
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
+.setup-segmented--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .setup-segment {
-  min-height: 34px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 0;
   border-radius: 7px;
   font-size: 13px;
@@ -525,5 +659,18 @@ function submitForm() {
 @keyframes float-slow {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(20px, -15px); }
+}
+
+@media (max-width: 640px) {
+  .control-group {
+    grid-template-columns: 1fr;
+  }
+  .health-card-head,
+  .health-actions {
+    align-items: flex-start;
+  }
+  .health-actions {
+    flex-direction: column;
+  }
 }
 </style>

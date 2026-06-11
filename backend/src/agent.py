@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
@@ -54,6 +54,10 @@ class DeepResearchAgent:
         self._tool_event_sink_enabled = False
         self._state_lock = Lock()
         self._cancel_event = Event()  # 取消信号
+        self._outline_action_event = Event()
+        self._outline_action_lock = Lock()
+        self._outline_action: str | None = None
+        self._waiting_for_outline_confirmation = False
 
         # 服务层（直接注入 OpenAI 客户端）
         self.planner = PlanningService(self.smart_client, self.config)
@@ -71,10 +75,22 @@ class DeepResearchAgent:
         """请求取消当前正在执行的研究任务。"""
         logger.info("Cancel requested for research agent")
         self._cancel_event.set()
+        self._outline_action_event.set()
 
     def is_cancelled(self) -> bool:
         """检查当前任务是否已被取消。"""
         return self._cancel_event.is_set()
+
+    def submit_report_outline_action(self, action: str) -> bool:
+        """提交报告大纲确认动作。"""
+        if action not in {"approve", "regenerate"}:
+            return False
+        with self._outline_action_lock:
+            if not self._waiting_for_outline_confirmation:
+                return False
+            self._outline_action = action
+            self._outline_action_event.set()
+            return True
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -199,6 +215,10 @@ class DeepResearchAgent:
         """
         # 重置取消状态
         self._cancel_event.clear()
+        self._outline_action_event.clear()
+        with self._outline_action_lock:
+            self._outline_action = None
+            self._waiting_for_outline_confirmation = False
 
         state = SummaryState(research_topic=topic)
         logger.debug("Starting streaming research: topic=%s", topic)
@@ -405,7 +425,13 @@ class DeepResearchAgent:
         if self.is_cancelled():
             return
 
-        report, refine_events = self._generate_report_via_agents_stream(state)
+        outline = None
+        if self.config.require_report_outline_confirmation and self.config.enable_report_outline:
+            outline = yield from self._stream_report_outline_review(state)
+            if self.is_cancelled():
+                return
+
+        report, refine_events = self._generate_report_via_agents_stream(state, outline=outline)
 
         if self.is_cancelled():
             return
@@ -440,6 +466,76 @@ class DeepResearchAgent:
             "note_id": state.report_note_id,
             "note_path": state.report_note_path,
         }
+
+    def _stream_report_outline_review(
+        self,
+        state: SummaryState,
+    ) -> Generator[dict[str, Any], None, dict[str, Any] | None]:
+        """生成报告大纲并等待用户确认。"""
+        max_attempts = max(1, self.config.report_outline_max_attempts)
+        attempt = 1
+        last_outline: dict[str, Any] | None = None
+
+        while attempt <= max_attempts:
+            if self.is_cancelled():
+                return None
+
+            yield {
+                "type": "log",
+                "message": f"正在生成报告大纲，等待用户确认（第 {attempt}/{max_attempts} 次）...",
+            }
+            outline = self.reporting.generate_report_outline(state)
+            if not outline:
+                yield {"type": "log", "message": "报告大纲生成失败，改为直接生成报告"}
+                return None
+
+            last_outline = outline
+            with self._outline_action_lock:
+                self._outline_action = None
+                self._waiting_for_outline_confirmation = True
+                self._outline_action_event.clear()
+
+            yield {
+                "type": "report_outline_review",
+                "outline": outline,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "message": "报告大纲已生成，请确认后继续制作，或重新生成大纲。",
+            }
+            yield {"type": "log", "message": "报告大纲已生成，正在等待用户确认..."}
+
+            action = self._wait_for_report_outline_action()
+            with self._outline_action_lock:
+                self._waiting_for_outline_confirmation = False
+                self._outline_action = None
+                self._outline_action_event.clear()
+
+            if self.is_cancelled():
+                return None
+            if action == "approve":
+                yield {"type": "log", "message": "用户已确认报告大纲，继续撰写正式报告"}
+                return outline
+            if action == "regenerate":
+                if attempt >= max_attempts:
+                    yield {"type": "log", "message": "报告大纲已达到重新生成次数上限，将使用当前大纲继续"}
+                    return outline
+                yield {"type": "log", "message": "用户请求重新生成报告大纲"}
+                attempt += 1
+                continue
+
+        return last_outline
+
+    def _wait_for_report_outline_action(self) -> str | None:
+        """等待前端提交报告大纲动作，同时响应取消。"""
+        while not self.is_cancelled():
+            if not self._outline_action_event.wait(timeout=0.5):
+                continue
+            with self._outline_action_lock:
+                action = self._outline_action
+            if action in {"approve", "regenerate"}:
+                return action
+            self._outline_action_event.clear()
+        return None
 
     def _stream_refine_phase(self, state: SummaryState) -> Iterator[dict[str, Any]]:
         """Phase 1.5: 迭代式深度搜索（信息饱和检测）。"""
@@ -713,15 +809,20 @@ class DeepResearchAgent:
             "message": "正在将研究报告转化为双人对谈播客脚本...",
         }
         yield {"type": "log", "message": f"正在调用 {self.config.active_llm_model()} 模型生成播客脚本..."}
-        yield {"type": "log", "message": "脚本策划专家正在规划节目蓝图，并创作 Host (苏打) 与 Guest (茉莉) 的对话..."}
+        if self.config.enable_script_blueprint:
+            yield {"type": "log", "message": "脚本策划专家正在规划节目蓝图，并创作 Host (苏打) 与 Guest (茉莉) 的对话..."}
+        else:
+            yield {"type": "log", "message": "快速模式跳过节目蓝图，直接生成短播客对话脚本..."}
 
         if self.is_cancelled():
             return
-        blueprint_result = self.director.dispatch(
-            "writer",
-            {"action": "blueprint", "state": state},
-        )
-        blueprint = blueprint_result.data.get("blueprint") if blueprint_result.success else None
+        blueprint = None
+        if self.config.enable_script_blueprint:
+            blueprint_result = self.director.dispatch(
+                "writer",
+                {"action": "blueprint", "state": state},
+            )
+            blueprint = blueprint_result.data.get("blueprint") if blueprint_result.success else None
         if blueprint:
             yield {
                 "type": "podcast_blueprint",
@@ -762,11 +863,11 @@ class DeepResearchAgent:
 
         return script_turns  # type: ignore[return-value]
 
-    def _generate_report_via_agents(self, state: SummaryState) -> str:
+    def _generate_report_via_agents(self, state: SummaryState, outline: dict[str, Any] | None = None) -> str:
         """通过 Writer/Critic Agent 生成并精炼报告。"""
         report_result = self.director.dispatch(
             "writer",
-            {"action": "report", "state": state},
+            {"action": "report", "state": state, "outline": outline},
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
@@ -816,12 +917,13 @@ class DeepResearchAgent:
     def _generate_report_via_agents_stream(
         self,
         state: SummaryState,
+        outline: dict[str, Any] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """通过 Writer/Critic Agent 生成报告，并返回精炼过程事件。"""
         events: list[dict[str, Any]] = []
         report_result = self.director.dispatch(
             "writer",
-            {"action": "report", "state": state},
+            {"action": "report", "state": state, "outline": outline},
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):

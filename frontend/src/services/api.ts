@@ -3,6 +3,11 @@ const baseURL =
 
 export interface ResearchRequest {
   topic: string;
+  search_depth?: "quick" | "deep";
+  podcast_duration?: "short" | "standard" | "deep";
+  podcast_style?: "plain" | "professional" | "news";
+  production_mode?: "quick" | "deep";
+  enable_intro_bgm?: boolean;
   llm_model_id?: "deepseek-v4-flash" | "deepseek-v4-pro";
   llm_reasoning_effort?: "high" | "max";
 }
@@ -22,6 +27,22 @@ export interface HealthCheckResponse {
   checks: HealthCheckItem[];
 }
 
+export interface ReportOutlineSection {
+  heading?: string;
+  purpose?: string;
+  key_claims?: string[];
+  evidence_needed?: string[];
+  table_suggestion?: string;
+}
+
+export interface ReportOutline {
+  title?: string;
+  reader_question?: string;
+  thesis?: string;
+  sections?: ReportOutlineSection[];
+  source_risks?: string[];
+}
+
 export type ResearchStreamEvent =
   | { type: "status"; message?: string }
   | { type: "log"; message?: string }
@@ -38,6 +59,7 @@ export type ResearchStreamEvent =
   | { type: "refine_round"; round: number; max_rounds: number; message?: string }
   | { type: "refine_saturation"; round?: number; reason?: string; message?: string }
   | { type: "report_refine"; phase: "critique" | "result"; round?: number; max_rounds?: number; score?: number; verdict?: string; issue_count?: number; message?: string }
+  | { type: "report_outline_review"; outline: ReportOutline; attempt: number; max_attempts: number; message?: string }
   | { type: "report_note"; note_id: string; title?: string; note_path?: string; content?: string }
   | { type: "tool_call"; event_id?: number; agent?: string; tool?: string; parameters?: unknown; result?: string; task_id?: number; note_id?: string; note_path?: string }
   | { type: "podcast_blueprint"; blueprint?: unknown; section_count?: number }
@@ -110,6 +132,23 @@ export async function cancelResearch(): Promise<void> {
   } catch (err) {
     console.warn("Failed to send cancel request:", err);
   }
+}
+
+export async function continueReportOutline(action: "approve" | "regenerate"): Promise<{ status: string; action?: string }> {
+  const response = await fetch(`${baseURL}/research/outline/continue`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: JSON.stringify({ action })
+  });
+
+  if (!response.ok) {
+    throw new Error(`报告大纲操作失败，状态码：${response.status}`);
+  }
+
+  return response.json() as Promise<{ status: string; action?: string }>;
 }
 
 export async function getHealthCheck(): Promise<HealthCheckResponse> {

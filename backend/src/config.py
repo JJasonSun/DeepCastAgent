@@ -241,6 +241,36 @@ class Configuration(BaseModel):
         title="信息增益阈值",
         description="精炼阶段的信息重复度上限（0-1），超过此值则终止深度搜索（0.8 表示 80% 重复）",
     )
+    production_mode: str = Field(
+        default="deep",
+        title="生产模式",
+        description="播客生成模式：quick 快速模式，deep 深度模式",
+    )
+    search_depth: str = Field(
+        default="deep",
+        title="搜索深度",
+        description="搜索与报告链路深度：quick 快速，deep 深度",
+    )
+    require_report_outline_confirmation: bool = Field(
+        default=False,
+        title="报告大纲确认",
+        description="是否在生成正式报告前等待用户确认报告大纲",
+    )
+    report_outline_max_attempts: int = Field(
+        default=3,
+        title="报告大纲最大生成次数",
+        description="用户可触发的大纲生成次数上限",
+    )
+    podcast_script_target_turns: str = Field(
+        default="16-20",
+        title="脚本目标轮次",
+        description="播客脚本目标对话轮次数，用于约束脚本生成",
+    )
+    podcast_style: str = Field(
+        default="plain",
+        title="播客风格",
+        description="播客脚本风格：plain 通俗解释，professional 专业分析，news 新闻播报",
+    )
 
     @field_validator("notes_workspace", "audio_output_dir", "intro_bgm_path")
     @classmethod
@@ -259,6 +289,30 @@ class Configuration(BaseModel):
         """限制 DeepSeek thinking mode 的推理强度配置。"""
         if v not in {"high", "max"}:
             raise ValueError("llm_reasoning_effort must be 'high' or 'max'")
+        return v
+
+    @field_validator("production_mode")
+    @classmethod
+    def validate_production_mode(cls, v: str) -> str:
+        """限制生产模式配置。"""
+        if v not in {"quick", "deep"}:
+            raise ValueError("production_mode must be 'quick' or 'deep'")
+        return v
+
+    @field_validator("search_depth")
+    @classmethod
+    def validate_search_depth(cls, v: str) -> str:
+        """限制搜索深度配置。"""
+        if v not in {"quick", "deep"}:
+            raise ValueError("search_depth must be 'quick' or 'deep'")
+        return v
+
+    @field_validator("podcast_style")
+    @classmethod
+    def validate_podcast_style(cls, v: str) -> str:
+        """限制播客风格配置。"""
+        if v not in {"plain", "professional", "news"}:
+            raise ValueError("podcast_style must be 'plain', 'professional' or 'news'")
         return v
 
     @classmethod

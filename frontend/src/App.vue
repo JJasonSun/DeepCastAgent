@@ -4,8 +4,10 @@
     <SetupView
       v-if="currentView === 'setup'"
       v-model:topic="form.topic"
-      v-model:model-id="form.llmModelId"
-      v-model:reasoning-effort="form.reasoningEffort"
+      v-model:search-depth="form.searchDepth"
+      v-model:podcast-duration="form.podcastDuration"
+      v-model:podcast-style="form.podcastStyle"
+      v-model:enable-intro-bgm="form.enableIntroBgm"
       :health-check="healthCheck"
       :health-loading="healthLoading"
       @start="startProduction"
@@ -24,10 +26,14 @@
       :report-ready="reportReady"
       :podcast-ready="podcastReady"
       :podcast-blueprint="podcastBlueprint"
+      :report-outline-review="reportOutlineReview"
+      :outline-action-loading="outlineActionLoading"
       :audio-url="audioUrl"
       @cancel="cancelProduction"
       @download-report="downloadReport"
       @go-player="currentView = 'player'"
+      @confirm-outline="confirmOutline"
+      @regenerate-outline="regenerateOutline"
     />
 
     <!-- View 3: Player -->
@@ -44,7 +50,15 @@
 
 <script lang="ts" setup>
 import { reactive, ref, nextTick, onMounted } from "vue";
-import { runResearchStream, cancelResearch, getHealthCheck, type HealthCheckResponse, type ResearchStreamEvent } from "./services/api";
+import {
+  runResearchStream,
+  cancelResearch,
+  continueReportOutline,
+  getHealthCheck,
+  type HealthCheckResponse,
+  type ReportOutline,
+  type ResearchStreamEvent
+} from "./services/api";
 
 import SetupView from "./components/SetupView.vue";
 import ProductionView from "./components/ProductionView.vue";
@@ -54,14 +68,26 @@ import type { PodcastBlueprint, ProductionStage } from "./components/ProductionV
 
 // --- Types ---
 type ViewState = "setup" | "producing" | "player";
+type SearchDepth = "quick" | "deep";
+type PodcastDuration = "short" | "standard" | "deep";
+type PodcastStyle = "plain" | "professional" | "news";
+
+interface ReportOutlineReview {
+  outline: ReportOutline;
+  attempt: number;
+  maxAttempts: number;
+  message?: string;
+}
 
 // --- State ---
 const currentView = ref<ViewState>("setup");
 const productionStage = ref<ProductionStage>("research");
 const form = reactive({
   topic: "",
-  llmModelId: "deepseek-v4-flash" as "deepseek-v4-flash" | "deepseek-v4-pro",
-  reasoningEffort: "high" as "high" | "max"
+  searchDepth: "quick" as SearchDepth,
+  podcastDuration: "standard" as PodcastDuration,
+  podcastStyle: "plain" as PodcastStyle,
+  enableIntroBgm: true
 });
 
 const logs = ref<LogEntry[]>([]);
@@ -78,6 +104,8 @@ let waitingInterval: ReturnType<typeof setInterval> | null = null;
 const reportMarkdown = ref("");
 const audioUrl = ref("");
 const podcastBlueprint = ref<PodcastBlueprint | null>(null);
+const reportOutlineReview = ref<ReportOutlineReview | null>(null);
+const outlineActionLoading = ref<"approve" | "regenerate" | null>(null);
 const healthCheck = ref<HealthCheckResponse | null>(null);
 const healthLoading = ref(false);
 
@@ -151,6 +179,8 @@ async function startProduction() {
   reportMarkdown.value = "";
   audioUrl.value = "";
   podcastBlueprint.value = null;
+  reportOutlineReview.value = null;
+  outlineActionLoading.value = null;
   audioProgress.current = 0;
   audioProgress.total = 0;
   taskProgress.completed = 0;
@@ -164,14 +194,18 @@ async function startProduction() {
 
   addLog("🚀 启动 DeepCast 制作流程...");
   addLog(`📌 主题: ${form.topic}`);
-  addLog(`🧠 模型: ${form.llmModelId} / 关键任务推理强度: ${form.reasoningEffort}`);
+  addLog(
+    `⚙️ 搜索: ${form.searchDepth === "quick" ? "快速" : "深度"} / 时长: ${durationLabel(form.podcastDuration)} / 风格: ${styleLabel(form.podcastStyle)} / 片头 BGM: ${form.enableIntroBgm ? "开启" : "关闭"}`
+  );
 
   try {
     await runResearchStream(
       {
         topic: form.topic,
-        llm_model_id: form.llmModelId,
-        llm_reasoning_effort: form.reasoningEffort
+        search_depth: form.searchDepth,
+        podcast_duration: form.podcastDuration,
+        podcast_style: form.podcastStyle,
+        enable_intro_bgm: form.enableIntroBgm
       },
       handleStreamEvent,
       { signal: abortController.signal }
@@ -189,6 +223,24 @@ async function startProduction() {
     stopWaitingAnimation();
     abortController = null;
   }
+}
+
+function durationLabel(duration: PodcastDuration) {
+  const labels: Record<PodcastDuration, string> = {
+    short: "短",
+    standard: "标准",
+    deep: "深度"
+  };
+  return labels[duration];
+}
+
+function styleLabel(style: PodcastStyle) {
+  const labels: Record<PodcastStyle, string> = {
+    plain: "通俗解释",
+    professional: "专业分析",
+    news: "新闻播报"
+  };
+  return labels[style];
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
@@ -307,6 +359,20 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     }
   }
 
+  if (event.type === "report_outline_review") {
+    reportOutlineReview.value = {
+      outline: event.outline,
+      attempt: event.attempt,
+      maxAttempts: event.max_attempts,
+      message: event.message
+    };
+    outlineActionLoading.value = null;
+    productionStage.value = "outline_review";
+    progressPercent.value = 45;
+    addLog(`🧭 [OUTLINE] 报告大纲待确认（第 ${event.attempt}/${event.max_attempts} 次）`);
+    return;
+  }
+
   if (event.type === "podcast_blueprint") {
     podcastBlueprint.value = (event.blueprint || null) as PodcastBlueprint | null;
     const title = podcastBlueprint.value?.title || "未命名节目";
@@ -317,6 +383,8 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   if (event.type === "final_report") {
     reportMarkdown.value = String(event.report);
     reportReady.value = true;
+    reportOutlineReview.value = null;
+    outlineActionLoading.value = null;
     addLog("📄 [REPORT] 报告已生成");
   }
 
@@ -373,6 +441,37 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 }
 
+async function submitOutlineAction(action: "approve" | "regenerate") {
+  if (!reportOutlineReview.value || outlineActionLoading.value) return;
+  outlineActionLoading.value = action;
+  try {
+    const result = await continueReportOutline(action);
+    if (result.status !== "accepted") {
+      addLog("⚠️ [OUTLINE] 当前没有等待确认的大纲任务");
+      outlineActionLoading.value = null;
+      return;
+    }
+    if (action === "approve") {
+      addLog("✅ [OUTLINE] 已确认报告大纲，继续生成报告");
+      reportOutlineReview.value = null;
+      productionStage.value = "research";
+    } else {
+      addLog("🔄 [OUTLINE] 正在重新生成报告大纲");
+    }
+  } catch (err: any) {
+    addLog(`❌ [OUTLINE] 操作失败: ${err.message || err}`);
+    outlineActionLoading.value = null;
+  }
+}
+
+function confirmOutline() {
+  submitOutlineAction("approve");
+}
+
+function regenerateOutline() {
+  submitOutlineAction("regenerate");
+}
+
 function cancelProduction() {
   if (confirm("确定要取消制作吗？")) {
     addLog("🛑 用户请求取消制作...");
@@ -402,6 +501,8 @@ function resetApp() {
   reportReady.value = false;
   podcastReady.value = false;
   podcastBlueprint.value = null;
+  reportOutlineReview.value = null;
+  outlineActionLoading.value = null;
   audioUrl.value = "";
   stopWaitingAnimation();
 }

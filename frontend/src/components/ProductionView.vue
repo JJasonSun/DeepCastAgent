@@ -173,6 +173,70 @@
         <!-- Right Column: Logs & Output -->
         <div class="lg:col-span-3 flex flex-col gap-4">
 
+          <!-- Report Outline Review -->
+          <section v-if="reportOutlineReview" class="outline-panel">
+            <div class="outline-header">
+              <div>
+                <p class="outline-eyebrow">报告大纲确认</p>
+                <h3 class="outline-title">{{ reportOutlineReview.outline.title || "待确认报告大纲" }}</h3>
+              </div>
+              <span class="outline-badge">第 {{ reportOutlineReview.attempt }}/{{ reportOutlineReview.maxAttempts }} 次</span>
+            </div>
+
+            <div class="outline-summary">
+              <div>
+                <span>读者问题</span>
+                <p>{{ reportOutlineReview.outline.reader_question || "暂无" }}</p>
+              </div>
+              <div>
+                <span>核心主线</span>
+                <p>{{ reportOutlineReview.outline.thesis || "暂无" }}</p>
+              </div>
+            </div>
+
+            <div v-if="reportOutlineReview.outline.sections?.length" class="outline-sections">
+              <article
+                v-for="(section, index) in reportOutlineReview.outline.sections"
+                :key="`${section.heading || 'section'}-${index}`"
+                class="outline-section"
+              >
+                <div class="outline-section-index">{{ index + 1 }}</div>
+                <div class="min-w-0">
+                  <h4>{{ section.heading || `章节 ${index + 1}` }}</h4>
+                  <p v-if="section.purpose">{{ section.purpose }}</p>
+                  <ul v-if="section.key_claims?.length">
+                    <li v-for="claim in section.key_claims.slice(0, 2)" :key="claim">{{ claim }}</li>
+                  </ul>
+                </div>
+              </article>
+            </div>
+
+            <div v-if="reportOutlineReview.outline.source_risks?.length" class="outline-risks">
+              <span>来源风险</span>
+              <p>{{ reportOutlineReview.outline.source_risks.join("；") }}</p>
+            </div>
+
+            <div class="outline-actions">
+              <button
+                class="outline-action-primary"
+                :disabled="outlineActionLoading !== null"
+                @click="$emit('confirmOutline')"
+              >
+                {{ outlineActionLoading === "approve" ? "继续中..." : "确认继续" }}
+              </button>
+              <button
+                class="outline-action-secondary"
+                :disabled="!canRegenerateOutline || outlineActionLoading !== null"
+                @click="$emit('regenerateOutline')"
+              >
+                {{ outlineActionLoading === "regenerate" ? "生成中..." : "重新生成大纲" }}
+              </button>
+              <button class="outline-action-ghost" :disabled="outlineActionLoading !== null" @click="$emit('cancel')">
+                取消制作
+              </button>
+            </div>
+          </section>
+
           <!-- macOS Style Terminal -->
           <TerminalLog ref="terminalRef" :logs="logs" :is-waiting="isWaiting" :waiting-dots="waitingDots" />
 
@@ -232,8 +296,9 @@
 import { ref, computed, toRef } from "vue";
 import TerminalLog from "./TerminalLog.vue";
 import type { LogEntry } from "./TerminalLog.vue";
+import type { ReportOutline } from "../services/api";
 
-export type ProductionStage = "research" | "script" | "audio" | "done" | "cancelled" | "error";
+export type ProductionStage = "research" | "outline_review" | "script" | "audio" | "done" | "cancelled" | "error";
 
 export interface PodcastBlueprintSection {
   segment_title?: string;
@@ -253,6 +318,13 @@ export interface PodcastBlueprint {
   cta?: string;
 }
 
+export interface ReportOutlineReview {
+  outline: ReportOutline;
+  attempt: number;
+  maxAttempts: number;
+  message?: string;
+}
+
 interface PipelineStep {
   id: ProductionStage;
   icon: string;
@@ -262,12 +334,13 @@ interface PipelineStep {
 
 const pipelineSteps: PipelineStep[] = [
   { id: "research", icon: "🔍", label: "深度研究", desc: "网络搜索 & 信息聚合" },
+  { id: "outline_review", icon: "🧭", label: "大纲确认", desc: "确认主线 & 章节结构" },
   { id: "script", icon: "✍️", label: "剧本创作", desc: "生成对话 & 角色分配" },
   { id: "audio", icon: "🎵", label: "音频合成", desc: "TTS 语音生成 & 拼接" },
   { id: "done", icon: "🎉", label: "制作完成", desc: "播放 & 下载播客" },
 ];
 
-const stepsOrder: ProductionStage[] = ["research", "script", "audio", "done"];
+const stepsOrder: ProductionStage[] = ["research", "outline_review", "script", "audio", "done"];
 
 const props = defineProps<{
   logs: LogEntry[];
@@ -278,6 +351,8 @@ const props = defineProps<{
   reportReady: boolean;
   podcastReady: boolean;
   podcastBlueprint: PodcastBlueprint | null;
+  reportOutlineReview: ReportOutlineReview | null;
+  outlineActionLoading: "approve" | "regenerate" | null;
   audioUrl: string;
 }>();
 
@@ -285,6 +360,8 @@ defineEmits<{
   cancel: [];
   downloadReport: [];
   goPlayer: [];
+  confirmOutline: [];
+  regenerateOutline: [];
 }>();
 
 const terminalRef = ref<InstanceType<typeof TerminalLog> | null>(null);
@@ -298,6 +375,10 @@ defineExpose({ scrollTerminal });
 const progress = toRef(props, 'progressPercent');
 const currentIdx = computed(() => stepsOrder.indexOf(props.productionStage));
 const sectionCount = computed(() => props.podcastBlueprint?.sections?.length || 0);
+const canRegenerateOutline = computed(() => {
+  if (!props.reportOutlineReview) return false;
+  return props.reportOutlineReview.attempt < props.reportOutlineReview.maxAttempts;
+});
 
 const isCancelled = computed(() => props.productionStage === 'cancelled');
 const isError = computed(() => props.productionStage === 'error');
@@ -305,6 +386,7 @@ const isError = computed(() => props.productionStage === 'error');
 const stageLabel = computed(() => {
   const labels: Record<ProductionStage, string> = {
     research: "正在进行深度研究...",
+    outline_review: "等待确认报告大纲...",
     script: "正在创作剧本...",
     audio: "正在合成音频...",
     done: "播客制作完成！",
@@ -584,6 +666,168 @@ function isStepPending(stepId: ProductionStage) {
 .nav-action-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Report Outline Review ── */
+.outline-panel {
+  background: rgba(18, 21, 29, 0.86);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+}
+.outline-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.outline-eyebrow {
+  color: #a5b4fc;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 800;
+}
+.outline-title {
+  margin-top: 6px;
+  color: #f8fafc;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 800;
+}
+.outline-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 8px;
+  color: #c4b5fd;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  font-size: 12px;
+  font-weight: 800;
+}
+.outline-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.outline-summary > div,
+.outline-risks {
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.outline-summary span,
+.outline-risks span {
+  display: block;
+  color: #818cf8;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 5px;
+}
+.outline-summary p,
+.outline-risks p {
+  color: #d1d5db;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.outline-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.outline-section {
+  display: flex;
+  gap: 10px;
+  padding: 11px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.outline-section-index {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.16);
+  font-size: 12px;
+  font-weight: 800;
+}
+.outline-section h4 {
+  color: #f3f4f6;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 800;
+}
+.outline-section p,
+.outline-section li {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.outline-section p {
+  margin-top: 4px;
+}
+.outline-section ul {
+  margin-top: 6px;
+  padding-left: 16px;
+}
+.outline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 14px;
+}
+.outline-action-primary,
+.outline-action-secondary,
+.outline-action-ghost {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  transition: all 0.2s ease;
+}
+.outline-action-primary {
+  color: #ffffff;
+  background: #2563eb;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.outline-action-secondary {
+  color: #c7d2fe;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+}
+.outline-action-ghost {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.16);
+}
+.outline-action-primary:hover:not(:disabled),
+.outline-action-secondary:hover:not(:disabled),
+.outline-action-ghost:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+.outline-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .outline-summary,
+  .outline-sections {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── MP3 Preview Player ── */

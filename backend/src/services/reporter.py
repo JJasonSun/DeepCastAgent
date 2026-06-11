@@ -149,18 +149,20 @@ class ReportingService:
         self._client = client
         self._config = config
 
-    def generate_report(self, state: SummaryState) -> str:
+    def generate_report(self, state: SummaryState, outline: dict[str, Any] | None = None) -> str:
         """
         基于完成的任务生成结构化报告。
 
         Args:
             state: 包含任务结果和笔记的研究状态。
+            outline: 可选的已确认报告大纲，用于约束正式报告结构。
 
         Returns:
             Markdown 格式的报告文本。
         """
         tasks_context = self._build_tasks_context(state)
-        outline = self._generate_report_outline(state, tasks_context)
+        if outline is None:
+            outline = self._generate_report_outline(state, tasks_context)
         outline_block = ""
         if outline:
             outline_block = (
@@ -200,6 +202,11 @@ class ReportingService:
         if not report_text:
             logger.error("Report generation returned empty text.")
         return report_text
+
+    def generate_report_outline(self, state: SummaryState) -> dict[str, Any] | None:
+        """生成可供用户确认的报告大纲。"""
+        tasks_context = self._build_tasks_context(state)
+        return self._generate_report_outline(state, tasks_context)
 
     def _build_tasks_context(self, state: SummaryState) -> str:
         """构建报告写作所需的任务上下文。"""
