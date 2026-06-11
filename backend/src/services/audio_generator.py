@@ -20,15 +20,22 @@ class AudioGenerationService:
     """处理与 MiMo TTS 服务的交互，支持导演模式和文本音色设计。"""
 
     # ── 音色设计描述（用于 VoiceDesign 模型） ──────────────────────
+    _VOICE_DESIGN_SHARED = (
+        "声音来自同一档中文知识播客，录音棚质感干净，口播自然，"
+        "音量稳定，语速中等略快，情绪表达克制但有温度，"
+        "不要夸张表演，不要突然提高音量或大幅改变语速。"
+    )
     _VOICE_DESIGN_HOST = (
-        "一位二十多岁的年轻男性播客主持人，声音温暖明亮、富有亲和力，"
-        "像一个好奇心旺盛的朋友在聊天，语速偏快、节奏活泼，"
-        "兴奋时会不自觉提高音量加快语速，带点幽默感和少年气。"
+        f"{_VOICE_DESIGN_SHARED}"
+        "年轻成年男性播客主持人，音色温暖明亮、亲和清爽，"
+        "提问时带一点好奇和轻微笑意，像认真聆听的搭档，"
+        "表达轻快但不跳脱，和女嘉宾保持同一档节目质感。"
     )
     _VOICE_DESIGN_GUEST = (
-        "一位三十岁左右的知性女性，声音清亮温暖、略带磁性，"
-        "像一位博学但不摆架子的学姐，语速适中偏快、节奏明快，"
-        "表达清晰流畅，偶尔在重点处放慢加重语气，带点温柔的幽默感。"
+        f"{_VOICE_DESIGN_SHARED}"
+        "成年女性播客嘉宾，音色温暖清亮、稳定清晰，"
+        "解释时有专业感和亲和力，重点处可以稍作停顿，"
+        "语气不端着、不拖慢，和男主持保持同一档节目质感。"
     )
 
     # ── 预置音色（降级方案） ────────────────────────────────────────
@@ -37,14 +44,19 @@ class AudioGenerationService:
 
     # ── 导演模式角色描述 ────────────────────────────────────────────
     _DIRECTOR_HOST = (
-        "角色：年轻男性播客主持人，好奇心强、幽默风趣、精力充沛，"
-        "代表普通听众视角，善于用生活化比喻提问，语速快、反应灵敏。\n\n"
-        "场景：正在录制一档深度研究播客，与搭档进行双人对谈。"
+        "角色：年轻成年男性播客主持人，亲和、好奇、善于追问，"
+        "代表普通听众视角，用生活化比喻帮助理解。\n\n"
+        "场景：正在录制一档中文知识播客，与搭档进行双人对谈。"
     )
     _DIRECTOR_GUEST = (
-        "角色：知性女性领域专家，博学但不摆架子，表达清晰有力，"
-        "擅长深入浅出解释专业概念，语速明快、节奏流畅，偶尔用幽默化解术语。\n\n"
-        "场景：正在录制一档深度研究播客，与搭档进行双人对谈。"
+        "角色：成年女性领域嘉宾，专业、清晰、亲和，"
+        "擅长深入浅出解释专业概念，回应主持人的追问。\n\n"
+        "场景：正在录制一档中文知识播客，与搭档进行双人对谈。"
+    )
+    _DIRECTOR_SHARED_GUIDANCE = (
+        "共同指导：保持同一档节目的录音棚口播质感；"
+        "语速中等略快，音量稳定，情绪自然克制；"
+        "只做轻微语气变化，不要大喊、不要突然加速、不要过度表演。"
     )
 
     def __init__(self, config: Configuration) -> None:
@@ -116,27 +128,28 @@ class AudioGenerationService:
 
     def _build_director_instruction(self, role: str, emotion: str) -> str:
         """构建导演模式三段式 style 指令（角色/场景/指导）。"""
-        if "host" in role.lower() or "苏打" in role:
-            character_scene = self._DIRECTOR_HOST
-            default_direction = (
-                "指导：语速偏快、节奏活泼，像朋友聊天一样自然放松。"
-                "提问时带着好奇和期待，总结时稍微放慢加重。"
-                "情绪饱满，声音明亮有活力。"
-            )
-        else:
+        if self._is_guest_role(role):
             character_scene = self._DIRECTOR_GUEST
             default_direction = (
-                "指导：语速适中偏快、节奏明快流畅，不要拖沓。"
-                "解释概念时清晰有力，偶尔在关键点稍作停顿强调。"
-                "声音温暖有亲和力，像学姐在耐心讲解，但不慢条斯理。"
+                "指导：语气稳定清晰，有专业感和亲和力。"
+                "解释概念时可在关键点稍作停顿，但不要显得端着或拖慢。"
+            )
+        else:
+            character_scene = self._DIRECTOR_HOST
+            default_direction = (
+                "指导：语气轻快、有好奇感，像自然地把问题递给搭档。"
+                "总结时稍微放慢强调，但整体不要跳脱。"
             )
 
         if emotion:
-            direction = f"指导：{emotion}。保持语速适中偏快、节奏明快。"
+            direction = (
+                f"指导：参考情绪“{self._normalize_emotion(emotion)}”，"
+                "但只做轻微表达变化，保持语速和音量稳定。"
+            )
         else:
             direction = default_direction
 
-        return f"{character_scene}\n\n{direction}"
+        return f"{character_scene}\n\n{self._DIRECTOR_SHARED_GUIDANCE}\n\n{direction}"
 
     # ── 音频标签嵌入 ──────────────────────────────────────────────
 
@@ -144,22 +157,71 @@ class AudioGenerationService:
     def _embed_audio_tag(content: str, audio_tag: str) -> str:
         """将音频标签嵌入到文本开头。"""
         if audio_tag:
-            return f"({audio_tag}){content}"
+            normalized_tag = AudioGenerationService._normalize_audio_tag(audio_tag)
+            if normalized_tag:
+                return f"({normalized_tag}){content}"
         return content
+
+    @staticmethod
+    def _normalize_emotion(emotion: str) -> str:
+        """收敛脚本情绪描述，避免 TTS 出现过大语速或音量差异。"""
+        replacements = {
+            "提高音量": "稍微加强语气",
+            "加大音量": "稍微加强语气",
+            "大声": "清晰强调",
+            "喊": "清晰强调",
+            "语速加快": "节奏略快",
+            "加快语速": "节奏略快",
+            "快速": "略快",
+            "兴奋": "轻快",
+            "激动": "轻快",
+            "夸张": "自然",
+            "大笑": "轻笑",
+        }
+        normalized = emotion.strip()
+        for source, target in replacements.items():
+            normalized = normalized.replace(source, target)
+        return normalized
+
+    @staticmethod
+    def _normalize_audio_tag(audio_tag: str) -> str:
+        """把强控制标签改写为更温和的 TTS 表现标签。"""
+        tag = audio_tag.strip()
+        tag_map = {
+            "提高音量": "轻声强调",
+            "加大音量": "轻声强调",
+            "语速加快": "节奏略快",
+            "节奏加快": "节奏略快",
+            "深呼吸": "稍作停顿",
+            "沉默片刻": "稍作停顿",
+            "叹气": "稍作停顿",
+            "大笑": "轻笑",
+        }
+        return tag_map.get(tag, tag)
 
     # ── 音色获取 ──────────────────────────────────────────────────
 
     def _get_voice_design_description(self, role: str) -> str:
         """获取角色的音色设计描述。"""
-        if "host" in role.lower() or "苏打" in role:
-            return self._VOICE_DESIGN_HOST
-        return self._VOICE_DESIGN_GUEST
+        if self._is_guest_role(role):
+            return self._VOICE_DESIGN_GUEST
+        return self._VOICE_DESIGN_HOST
 
     def _get_preset_voice(self, role: str) -> str:
         """获取预置音色名称（降级方案）。"""
-        if "host" in role.lower() or "苏打" in role:
-            return self._VOICE_HOST
-        return self._VOICE_GUEST
+        if self._is_guest_role(role):
+            return self._VOICE_GUEST
+        return self._VOICE_HOST
+
+    @staticmethod
+    def _is_host_role(role: str) -> bool:
+        """判断是否为 Host 角色。"""
+        return "host" in role.lower() or "苏打" in role
+
+    @staticmethod
+    def _is_guest_role(role: str) -> bool:
+        """判断是否为 Guest 角色。"""
+        return "guest" in role.lower() or "茉莉" in role
 
     # ── TTS API 调用 ─────────────────────────────────────────────
 
