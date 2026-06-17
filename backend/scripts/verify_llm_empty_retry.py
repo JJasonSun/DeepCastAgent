@@ -1,4 +1,4 @@
-"""验证 LLM 空 content 会触发应用层重试。"""
+"""验证 LLM 空 content 和坏 JSON 会触发应用层重试。"""
 
 # ruff: noqa: E402
 
@@ -83,7 +83,24 @@ def main() -> None:
     assert parsed == {"ok": True}
     assert json_client.chat.completions.calls == 2
 
-    sys.stdout.write("✅ LLM 空 content 重试逻辑通过\n")
+    invalid_json_client = FakeClient(['{"turns": [', '{"ok": true}'])
+    parsed_after_invalid_json = call_llm_json(
+        invalid_json_client,
+        system_prompt="system",
+        user_prompt="user",
+        model="fake-model",
+        json_schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        },
+        max_retries=1,
+        retry_base_delay=0.1,
+    )
+    assert parsed_after_invalid_json == {"ok": True}
+    assert invalid_json_client.chat.completions.calls == 2
+
+    sys.stdout.write("✅ LLM 空 content 与坏 JSON 重试逻辑通过\n")
 
 
 if __name__ == "__main__":

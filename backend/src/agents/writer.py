@@ -52,7 +52,11 @@ class WriterAgent(BaseAgent):
             return AgentResult(success=False, data={"error": f"Unknown action: {action}"})
 
     def _generate_report(self, context: dict[str, Any], state: SummaryState) -> AgentResult:
-        report = self._reporter.generate_report(state)
+        outline = context.get("outline")
+        report = self._reporter.generate_report(
+            state,
+            outline=outline if isinstance(outline, dict) else None,
+        )
         is_failure = is_report_generation_failure(report)
         return AgentResult(
             success=bool(report) and not is_failure,

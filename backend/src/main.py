@@ -50,6 +50,26 @@ class ResearchRequest(BaseModel):
     """触发研究运行的负载。"""
 
     topic: str = Field(..., description="用户提供的研究主题")
+    search_depth: Literal["quick", "deep"] | None = Field(
+        default=None,
+        description="搜索与报告链路深度：quick 快速，deep 深度",
+    )
+    podcast_duration: Literal["short", "standard", "deep"] = Field(
+        default="standard",
+        description="播客目标时长：short 短，standard 标准，deep 深度",
+    )
+    podcast_style: Literal["plain", "professional", "news"] = Field(
+        default="plain",
+        description="播客表达风格：plain 通俗解释，professional 专业分析，news 新闻播报",
+    )
+    production_mode: Literal["quick", "deep"] | None = Field(
+        default=None,
+        description="播客生成模式：quick 快速模式，deep 深度模式",
+    )
+    enable_intro_bgm: bool | None = Field(
+        default=None,
+        description="是否启用片头 BGM；为空时使用环境配置",
+    )
     llm_model_id: Literal["deepseek-v4-flash", "deepseek-v4-pro"] | None = Field(
         default=None,
         description="本次任务使用的 DeepSeek 模型",
@@ -58,6 +78,13 @@ class ResearchRequest(BaseModel):
         default=None,
         description="关键任务的推理强度",
     )
+
+
+class OutlineContinueRequest(BaseModel):
+    """报告大纲确认动作。"""
+
+    action: Literal["approve", "regenerate"] = Field(..., description="大纲处理动作")
+
 
 class PodcastScript(BaseModel):
     """播客脚本内容模型。"""
@@ -115,6 +142,29 @@ def _mask_secret(value: str | None, visible: int = 4) -> str:
 def _build_config(payload: ResearchRequest | None = None) -> Configuration:
     overrides: dict[str, Any] = {}
     if payload is not None:
+        search_depth = payload.search_depth or payload.production_mode or "deep"
+        duration_turns = {
+            "short": "6-8",
+            "standard": "12-14",
+            "deep": "16-20",
+        }[payload.podcast_duration]
+        overrides.update(
+            {
+                "production_mode": search_depth,
+                "search_depth": search_depth,
+                "llm_model_id": "deepseek-v4-flash" if search_depth == "quick" else "deepseek-v4-pro",
+                "llm_reasoning_effort": "high" if search_depth == "quick" else "max",
+                "max_research_refine_rounds": 0 if search_depth == "quick" else 2,
+                "max_report_refine_rounds": 0 if search_depth == "quick" else 1,
+                "enable_report_outline": search_depth == "deep",
+                "enable_script_blueprint": search_depth == "deep",
+                "require_report_outline_confirmation": search_depth == "deep",
+                "podcast_script_target_turns": duration_turns,
+                "podcast_style": payload.podcast_style,
+            }
+        )
+        if payload.enable_intro_bgm is not None:
+            overrides["enable_intro_bgm"] = payload.enable_intro_bgm
         if payload.llm_model_id:
             overrides["llm_model_id"] = payload.llm_model_id
         if payload.llm_reasoning_effort:
@@ -396,6 +446,16 @@ def create_app() -> FastAPI:
             agent.cancel()
             return {"status": "cancelled", "message": "取消请求已发送"}
         return {"status": "no_task", "message": "当前没有正在运行的任务"}
+
+    @app.post("/research/outline/continue")
+    async def continue_report_outline(payload: OutlineContinueRequest) -> dict[str, str]:
+        """确认或重新生成当前等待中的报告大纲。"""
+        agent = _active_agent.get("current")
+        if agent and not agent.is_cancelled():
+            accepted = agent.submit_report_outline_action(payload.action)
+            if accepted:
+                return {"status": "accepted", "action": payload.action}
+        return {"status": "no_waiting_task"}
 
     @app.post("/research/stream")
     async def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:

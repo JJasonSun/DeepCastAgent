@@ -25,9 +25,13 @@ class EmptyLLMResponseError(RuntimeError):
     """LLM 请求成功但返回了空 content，适合作为临时失败重试。"""
 
 
+class StructuredOutputError(RuntimeError):
+    """LLM 返回的结构化输出无法解析或未通过 schema 校验。"""
+
+
 def is_retryable_api_error(exc: Exception) -> bool:
     """判断 OpenAI 兼容 API 异常是否适合重试。"""
-    if isinstance(exc, EmptyLLMResponseError):
+    if isinstance(exc, (EmptyLLMResponseError, StructuredOutputError)):
         return True
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
@@ -280,7 +284,7 @@ def call_llm_json(
         request_args["temperature"] = temperature
 
     request_args = _compact_request_args(request_args)
-    def create_json_completion() -> str:
+    def create_json_completion() -> dict[str, Any] | list:
         response = client.chat.completions.create(**request_args)
         choice = response.choices[0]
         content = choice.message.content or ""
@@ -291,10 +295,21 @@ def call_llm_json(
                 getattr(choice, "finish_reason", None),
             )
             raise EmptyLLMResponseError("LLM JSON completion returned empty content")
-        return content
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            logger.error("Structured output returned invalid JSON: %s", content[:500])
+            raise StructuredOutputError("Structured output returned invalid JSON") from exc
+        if response_transform is not None:
+            parsed = response_transform(parsed)
+        schema_errors = validate_json_schema(parsed, json_schema)
+        if schema_errors:
+            logger.error("Structured output failed schema validation: %s", "; ".join(schema_errors[:8]))
+            raise StructuredOutputError("Structured output failed schema validation")
+        return parsed
 
     try:
-        content = run_with_retry(
+        return run_with_retry(
             create_json_completion,
             operation_name=f"LLM JSON completion ({model})",
             max_retries=max_retries,
@@ -303,18 +318,9 @@ def call_llm_json(
     except EmptyLLMResponseError:
         logger.error("LLM JSON completion (%s) returned empty content after retries", model)
         return None
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        logger.error("Structured output returned invalid JSON: %s", content[:500])
+    except StructuredOutputError:
+        logger.error("LLM JSON completion (%s) returned invalid structured output after retries", model)
         return None
-    if response_transform is not None:
-        parsed = response_transform(parsed)
-    schema_errors = validate_json_schema(parsed, json_schema)
-    if schema_errors:
-        logger.error("Structured output failed schema validation: %s", "; ".join(schema_errors[:8]))
-        return None
-    return parsed
 
 
 def stream_llm(
