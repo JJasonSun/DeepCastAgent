@@ -69,7 +69,7 @@ import type { PodcastBlueprint, ProductionStage } from "./components/ProductionV
 // --- Types ---
 type ViewState = "setup" | "producing" | "player";
 type SearchDepth = "quick" | "deep";
-type PodcastDuration = "short" | "standard" | "deep";
+type PodcastDuration = "short" | "standard" | "long";
 type PodcastStyle = "plain" | "professional" | "news";
 
 interface ReportOutlineReview {
@@ -229,7 +229,7 @@ function durationLabel(duration: PodcastDuration) {
   const labels: Record<PodcastDuration, string> = {
     short: "短",
     standard: "标准",
-    deep: "深度"
+    long: "深度"
   };
   return labels[duration];
 }

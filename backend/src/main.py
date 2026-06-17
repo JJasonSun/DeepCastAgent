@@ -54,7 +54,7 @@ class ResearchRequest(BaseModel):
         default=None,
         description="搜索与报告链路深度：quick 快速，deep 深度",
     )
-    podcast_duration: Literal["short", "standard", "deep"] = Field(
+    podcast_duration: Literal["short", "standard", "long"] = Field(
         default="standard",
         description="播客目标时长：short 短，standard 标准，deep 深度",
     )
@@ -146,7 +146,7 @@ def _build_config(payload: ResearchRequest | None = None) -> Configuration:
         duration_turns = {
             "short": "6-8",
             "standard": "12-14",
-            "deep": "16-20",
+            "long": "16-20",
         }[payload.podcast_duration]
         overrides.update(
             {

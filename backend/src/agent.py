@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from queue import Empty, Queue
@@ -252,7 +253,11 @@ class DeepResearchAgent:
             return
 
         # Phase 3: 播客脚本
-        script_turns = yield from self._stream_script_phase(state)
+        try:
+            script_turns = yield from self._stream_script_phase(state)
+        except RuntimeError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -526,9 +531,14 @@ class DeepResearchAgent:
         return last_outline
 
     def _wait_for_report_outline_action(self) -> str | None:
-        """等待前端提交报告大纲动作，同时响应取消。"""
+        """等待前端提交报告大纲动作，同时响应取消和超时。"""
+        deadline = time.monotonic() + max(10, self.config.report_outline_timeout_seconds)
         while not self.is_cancelled():
-            if not self._outline_action_event.wait(timeout=0.5):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.info("报告大纲确认超时（%d 秒），自动使用当前大纲继续", self.config.report_outline_timeout_seconds)
+                return "approve"
+            if not self._outline_action_event.wait(timeout=min(0.5, remaining)):
                 continue
             with self._outline_action_lock:
                 action = self._outline_action

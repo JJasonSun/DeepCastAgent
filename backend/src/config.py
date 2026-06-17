@@ -266,6 +266,11 @@ class Configuration(BaseModel):
         title="报告大纲最大生成次数",
         description="用户可触发的大纲生成次数上限",
     )
+    report_outline_timeout_seconds: int = Field(
+        default=300,
+        title="报告大纲确认超时",
+        description="等待用户确认报告大纲的最大秒数，超时后自动使用当前大纲继续",
+    )
     podcast_script_target_turns: str = Field(
         default="16-20",
         title="脚本目标轮次",
