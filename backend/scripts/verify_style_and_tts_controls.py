@@ -72,15 +72,26 @@ def _assert_tts_consistency(output_dir: str) -> None:
         ],
         0,
     )
-    host_instruction = service._build_director_instruction("Host", "兴奋地提高音量并语速加快", "提高音量", context)
+    # normalize is now called in generate_audio() loop before _build_director_instruction
+    raw_emotion = "兴奋地提高音量并语速加快"
+    raw_tag = "提高音量"
+    normalized_emotion = service._normalize_emotion(raw_emotion)
+    normalized_tag = service._normalize_audio_tag(raw_tag)
+    assert "轻快" in normalized_emotion
+    assert "稍微加强语气" in normalized_emotion
+    assert "节奏略快" in normalized_emotion
+    assert normalized_tag == "轻声强调"
+
+    host_instruction = service._build_director_instruction("Host", normalized_emotion, normalized_tag, context)
     assert "共同指导" in host_instruction
     assert "连续对话上下文" in host_instruction
     assert "稍微加强语气" in host_instruction
     assert "节奏略快" in host_instruction
     assert "提高音量" not in host_instruction
 
-    assert AudioGenerationService._embed_audio_tag("内容", "提高音量") == "[轻声强调]内容"
-    assert AudioGenerationService._embed_audio_tag("内容", "语速加快") == "[节奏略快]内容"
+    # _embed_audio_tag embeds as-is (caller normalizes first)
+    assert AudioGenerationService._embed_audio_tag("内容", "轻声强调") == "[轻声强调]内容"
+    assert AudioGenerationService._embed_audio_tag("内容", "节奏略快") == "[节奏略快]内容"
 
 
 def main() -> None:

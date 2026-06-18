@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError, ScriptError
 from models import SummaryState, SummaryStateOutput, TodoItem
 from services.audio_generator import AudioGenerationService
 from services.audio_synthesizer import PodcastSynthesisService
@@ -247,7 +248,11 @@ class DeepResearchAgent:
             return
 
         # Phase 2: 报告生成（含 Self-Refine 精炼）
-        yield from self._stream_report_phase(state)
+        try:
+            yield from self._stream_report_phase(state)
+        except DeepCastError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -255,7 +260,7 @@ class DeepResearchAgent:
         # Phase 3: 播客脚本
         try:
             script_turns = yield from self._stream_script_phase(state)
-        except RuntimeError as exc:
+        except DeepCastError as exc:
             yield {"type": "error", "detail": str(exc)}
             return
         if self.is_cancelled():
@@ -290,8 +295,7 @@ class DeepResearchAgent:
         state.todo_items = plan_result.data.get("tasks", []) if plan_result.success else []
         if self.is_cancelled():
             return
-        for event in self._drain_tool_events(state, step=0):
-            yield event
+        yield from self._drain_tool_events(state, step=0)
         if not state.todo_items:
             fallback_result = self.director.dispatch(
                 "planner",
@@ -313,6 +317,32 @@ class DeepResearchAgent:
             "step": 0,
         }
 
+        yield from self._run_parallel_tasks(
+            state.todo_items, channel_map, state,
+            include_note_fields=True, error_label="Task",
+        )
+
+    def _run_parallel_tasks(
+        self,
+        tasks: list[TodoItem],
+        channel_map: dict[int, dict[str, Any]],
+        state: SummaryState,
+        *,
+        include_note_fields: bool = True,
+        error_label: str = "Task",
+    ) -> Iterator[dict[str, Any]]:
+        """并行执行任务列表，通过队列流式输出事件。
+
+        Args:
+            tasks: 待执行的任务列表。
+            channel_map: 任务 ID → {step, token} 映射。
+            state: 共享的研究状态。
+            include_note_fields: 是否在 task_status 事件中包含 note_id/note_path。
+            error_label: 日志中使用的任务阶段标签。
+
+        Yields:
+            除内部 __task_done__ 外的所有事件。
+        """
         event_queue: Queue[dict[str, Any]] = Queue()
 
         def enqueue(
@@ -343,52 +373,48 @@ class DeepResearchAgent:
                 if self.is_cancelled():
                     enqueue({"type": "__task_done__", "task_id": task.id})
                     return
-                enqueue(
-                    {
-                        "type": "task_status",
-                        "task_id": task.id,
-                        "status": "in_progress",
-                        "title": task.title,
-                        "intent": task.intent,
-                        "query": task.query,
-                        "note_id": task.note_id,
-                        "note_path": task.note_path,
-                    },
-                    task=task,
-                )
+                in_progress_event: dict[str, Any] = {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "status": "in_progress",
+                    "title": task.title,
+                    "intent": task.intent,
+                    "query": task.query,
+                }
+                if include_note_fields:
+                    in_progress_event["note_id"] = task.note_id
+                    in_progress_event["note_path"] = task.note_path
+                enqueue(in_progress_event, task=task)
                 for event in self._execute_task(state, task, emit_stream=True, step=step):
                     if self.is_cancelled():
                         break
                     enqueue(event, task=task)
             except Exception as exc:
-                if self.is_cancelled():
-                    logger.info("Task %s cancelled", task.id)
-                else:
-                    logger.exception("Task execution failed", exc_info=exc)
-                enqueue(
-                    {
-                        "type": "task_status",
-                        "task_id": task.id,
-                        "status": "failed",
-                        "detail": str(exc),
-                        "title": task.title,
-                        "intent": task.intent,
-                        "query": task.query,
-                        "note_id": task.note_id,
-                        "note_path": task.note_path,
-                    },
-                    task=task,
-                )
+                if not self.is_cancelled():
+                    logger.exception("%s execution failed", error_label, exc_info=exc)
+                failed_event: dict[str, Any] = {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "status": "failed",
+                    "detail": str(exc),
+                    "title": task.title,
+                    "intent": task.intent,
+                    "query": task.query,
+                }
+                if include_note_fields:
+                    failed_event["note_id"] = task.note_id
+                    failed_event["note_path"] = task.note_path
+                enqueue(failed_event, task=task)
             finally:
                 enqueue({"type": "__task_done__", "task_id": task.id})
 
-        for task in state.todo_items:
+        for task in tasks:
             step = channel_map.get(task.id, {}).get("step", 0)
             thread = Thread(target=worker, args=(task, step), daemon=True)
             threads.append(thread)
             thread.start()
 
-        active_workers = len(state.todo_items)
+        active_workers = len(tasks)
         finished_workers = 0
 
         try:
@@ -610,105 +636,13 @@ class DeepResearchAgent:
                 "round": round_num + 1,
             }
 
-            # 并行执行补充任务（复用 _stream_research_phase 的并行模式）
-            event_queue: Queue[dict[str, Any]] = Queue()
-
-            def enqueue(
-                event: dict[str, Any],
-                *,
-                task: TodoItem | None = None,
-                step_override: int | None = None,
-            ) -> None:
-                payload = dict(event)
-                target_task_id = payload.get("task_id")
-                if task is not None:
-                    target_task_id = task.id
-                    payload["task_id"] = task.id
-                channel = channel_map.get(target_task_id) if target_task_id is not None else None
-                if channel:
-                    payload.setdefault("step", channel["step"])
-                    payload["stream_token"] = channel["token"]
-                if step_override is not None:
-                    payload["step"] = step_override
-                event_queue.put(payload)
-
-            self._set_tool_event_sink(lambda ev: enqueue(ev))
-
-            threads: list[Thread] = []
-
-            def worker(task: TodoItem, step: int) -> None:
-                try:
-                    if self.is_cancelled():
-                        enqueue({"type": "__task_done__", "task_id": task.id})
-                        return
-                    enqueue(
-                        {
-                            "type": "task_status",
-                            "task_id": task.id,
-                            "status": "in_progress",
-                            "title": task.title,
-                            "intent": task.intent,
-                            "query": task.query,
-                        },
-                        task=task,
-                    )
-                    for event in self._execute_task(state, task, emit_stream=True, step=step):
-                        if self.is_cancelled():
-                            break
-                        enqueue(event, task=task)
-                except Exception as exc:
-                    if not self.is_cancelled():
-                        logger.exception("Refine task execution failed", exc_info=exc)
-                    enqueue(
-                        {
-                            "type": "task_status",
-                            "task_id": task.id,
-                            "status": "failed",
-                            "detail": str(exc),
-                            "title": task.title,
-                            "intent": task.intent,
-                            "query": task.query,
-                        },
-                        task=task,
-                    )
-                finally:
-                    enqueue({"type": "__task_done__", "task_id": task.id})
-
+            # 并行执行补充任务
             for task in new_tasks:
                 state.todo_items.append(task)
-                step = channel_map.get(task.id, {}).get("step", 0)
-                thread = Thread(target=worker, args=(task, step), daemon=True)
-                threads.append(thread)
-                thread.start()
-
-            active_workers = len(new_tasks)
-            finished_workers = 0
-
-            try:
-                while finished_workers < active_workers:
-                    try:
-                        event = event_queue.get(timeout=0.5)
-                    except Empty:
-                        if self.is_cancelled():
-                            yield {"type": "cancelled", "message": "研究任务已取消"}
-                            return
-                        continue
-                    if event.get("type") == "__task_done__":
-                        finished_workers += 1
-                        continue
-                    yield event
-
-                while True:
-                    try:
-                        event = event_queue.get_nowait()
-                    except Empty:
-                        break
-                    if event.get("type") != "__task_done__":
-                        yield event
-            finally:
-                self._set_tool_event_sink(None)
-                for thread in threads:
-                    thread.join(timeout=1.0)
+            yield from self._run_parallel_tasks(
+                new_tasks, channel_map, state,
+                include_note_fields=False, error_label="Refine task",
+            )
 
             # 智能终止：检查信息重复度
             completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
@@ -855,7 +789,7 @@ class DeepResearchAgent:
             },
         )
         if not script_result.success:
-            raise RuntimeError("脚本生成失败：模型未返回合法播客脚本，已停止后续音频生成。")
+            raise ScriptError("脚本生成失败：模型未返回合法播客脚本，已停止后续音频生成。")
 
         script = script_result.data.get("script", [])
         if self.is_cancelled():
@@ -865,7 +799,7 @@ class DeepResearchAgent:
 
         script_turns = len(script) if script else 0
         if script_turns == 0:
-            raise RuntimeError("脚本生成失败：模型返回空脚本，已停止后续音频生成。")
+            raise ScriptError("脚本生成失败：模型返回空脚本，已停止后续音频生成。")
 
         yield {"type": "log", "message": f"脚本生成完成，共 {script_turns} 轮对话"}
         yield {
@@ -884,7 +818,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise DeepCastError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         if not current_report or self.config.max_report_refine_rounds <= 0:
             return current_report
 
@@ -940,7 +874,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise DeepCastError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         events.append({"type": "log", "message": f"报告初稿生成完成，共 {len(current_report)} 字符"})
 
         if not current_report or self.config.max_report_refine_rounds <= 0:

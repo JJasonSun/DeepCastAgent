@@ -14,6 +14,7 @@ sys.path.append(str(BACKEND_ROOT / "src"))
 
 from agent import DeepResearchAgent
 from config import Configuration
+from errors import ScriptError
 from models import SummaryState
 
 
@@ -61,10 +62,10 @@ def main() -> None:
 
     try:
         next(stream)
-    except RuntimeError as exc:
+    except ScriptError as exc:
         assert "脚本生成失败" in str(exc)
     else:
-        raise AssertionError("脚本失败应触发 RuntimeError")
+        raise AssertionError("脚本失败应触发 ScriptError")
 
     assert state.podcast_script is None
     assert len(agent.director.calls) == 1

@@ -9,6 +9,7 @@ from typing import Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import SearchError
 from prompts import search_result_filter_instructions
 from services.llm import call_llm_json, run_with_retry
 from utils import (
@@ -143,7 +144,7 @@ def dispatch_search(
             backend_label = "hybrid"
     except Exception as exc:
         logger.exception("Search backend %s failed: %s", search_api, exc)
-        raise
+        raise SearchError(f"搜索后端 {search_api} 调用失败: {exc}") from exc
 
     if not results:
         notices.append(f"搜索后端 {backend_label} 未返回结果")

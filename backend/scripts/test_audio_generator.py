@@ -20,6 +20,8 @@ class TestAudioGenerationService(unittest.TestCase):
         self.mock_config.enable_tts_voice_design = False
         self.mock_config.tts_timeout = 300
         self.mock_config.ffmpeg_path = "ffmpeg"
+        self.mock_config.tts_preset_voice_host = "苏打"
+        self.mock_config.tts_preset_voice_guest = "茉莉"
 
         # Patch Path.mkdir to avoid actual filesystem creation during init
         with patch('pathlib.Path.mkdir'):
@@ -93,8 +95,14 @@ class TestAudioGenerationService(unittest.TestCase):
         self.assertIn("稍微加强语气", emotion)
         self.assertIn("节奏略快", emotion)
 
+        # normalize_audio_tag is now called in generate_audio loop, not in _embed_audio_tag
         self.assertEqual(
-            AudioGenerationService._embed_audio_tag("内容", "提高音量"),
+            AudioGenerationService._normalize_audio_tag("提高音量"),
+            "轻声强调"
+        )
+        # _embed_audio_tag embeds the tag as-is (caller must normalize first)
+        self.assertEqual(
+            AudioGenerationService._embed_audio_tag("内容", "轻声强调"),
             "[轻声强调]内容"
         )
 

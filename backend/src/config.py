@@ -101,6 +101,16 @@ class Configuration(BaseModel):
         title="启用 TTS 音色设计",
         description="是否使用 VoiceDesign 模型；默认使用预置音色以获得更稳定的真人感",
     )
+    tts_preset_voice_host: str = Field(
+        default="苏打",
+        title="Host 预置音色",
+        description="播客主持人（Host）的预置音色名称",
+    )
+    tts_preset_voice_guest: str = Field(
+        default="茉莉",
+        title="Guest 预置音色",
+        description="播客嘉宾（Guest）的预置音色名称",
+    )
     audio_output_dir: str = Field(
         default=str(BACKEND_ROOT / "output" / "audio"),
         title="音频输出目录",
@@ -324,6 +334,45 @@ class Configuration(BaseModel):
         if v not in {"plain", "professional", "news"}:
             raise ValueError("podcast_style must be 'plain', 'professional' or 'news'")
         return v
+
+
+    @classmethod
+    def apply_production_preset(
+        cls,
+        search_depth: str,
+        podcast_duration: str,
+        podcast_style: str,
+    ) -> dict[str, Any]:
+        """将用户语义参数展开为底层 config 覆盖字典。
+
+        Args:
+            search_depth: "quick" 或 "deep"。
+            podcast_duration: "short"、"standard" 或 "long"。
+            podcast_style: "plain"、"professional" 或 "news"。
+
+        Returns:
+            可直接传给 from_env(overrides=...) 的字典。
+        """
+        duration_turns = {
+            "short": "6-8",
+            "standard": "12-14",
+            "long": "16-20",
+        }
+        turns = duration_turns.get(podcast_duration, "12-14")
+        is_deep = search_depth == "deep"
+        return {
+            "production_mode": search_depth,
+            "search_depth": search_depth,
+            "llm_model_id": "deepseek-v4-flash" if search_depth == "quick" else "deepseek-v4-pro",
+            "llm_reasoning_effort": "high" if search_depth == "quick" else "max",
+            "max_research_refine_rounds": 0 if search_depth == "quick" else 2,
+            "max_report_refine_rounds": 0 if search_depth == "quick" else 1,
+            "enable_report_outline": is_deep,
+            "enable_script_blueprint": is_deep,
+            "require_report_outline_confirmation": is_deep,
+            "podcast_script_target_turns": turns,
+            "podcast_style": podcast_style,
+        }
 
     @classmethod
     def from_env(cls, overrides: dict[str, Any] | None = None) -> "Configuration":

@@ -117,7 +117,7 @@ def _assert_config_mapping() -> None:
         ResearchRequest(
             topic="测试",
             search_depth="deep",
-            podcast_duration="deep",
+            podcast_duration="long",
             podcast_style="news",
             enable_intro_bgm=True,
         )

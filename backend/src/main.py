@@ -70,14 +70,6 @@ class ResearchRequest(BaseModel):
         default=None,
         description="是否启用片头 BGM；为空时使用环境配置",
     )
-    llm_model_id: Literal["deepseek-v4-flash", "deepseek-v4-pro"] | None = Field(
-        default=None,
-        description="本次任务使用的 DeepSeek 模型",
-    )
-    llm_reasoning_effort: Literal["high", "max"] | None = Field(
-        default=None,
-        description="关键任务的推理强度",
-    )
 
 
 class OutlineContinueRequest(BaseModel):
@@ -143,32 +135,13 @@ def _build_config(payload: ResearchRequest | None = None) -> Configuration:
     overrides: dict[str, Any] = {}
     if payload is not None:
         search_depth = payload.search_depth or payload.production_mode or "deep"
-        duration_turns = {
-            "short": "6-8",
-            "standard": "12-14",
-            "long": "16-20",
-        }[payload.podcast_duration]
-        overrides.update(
-            {
-                "production_mode": search_depth,
-                "search_depth": search_depth,
-                "llm_model_id": "deepseek-v4-flash" if search_depth == "quick" else "deepseek-v4-pro",
-                "llm_reasoning_effort": "high" if search_depth == "quick" else "max",
-                "max_research_refine_rounds": 0 if search_depth == "quick" else 2,
-                "max_report_refine_rounds": 0 if search_depth == "quick" else 1,
-                "enable_report_outline": search_depth == "deep",
-                "enable_script_blueprint": search_depth == "deep",
-                "require_report_outline_confirmation": search_depth == "deep",
-                "podcast_script_target_turns": duration_turns,
-                "podcast_style": payload.podcast_style,
-            }
+        overrides = Configuration.apply_production_preset(
+            search_depth=search_depth,
+            podcast_duration=payload.podcast_duration,
+            podcast_style=payload.podcast_style,
         )
         if payload.enable_intro_bgm is not None:
             overrides["enable_intro_bgm"] = payload.enable_intro_bgm
-        if payload.llm_model_id:
-            overrides["llm_model_id"] = payload.llm_model_id
-        if payload.llm_reasoning_effort:
-            overrides["llm_reasoning_effort"] = payload.llm_reasoning_effort
     return Configuration.from_env(overrides)
 
 
