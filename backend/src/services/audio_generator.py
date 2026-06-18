@@ -11,6 +11,7 @@ from threading import Event
 from openai import OpenAI
 
 from config import Configuration
+from errors import TTSError
 from services.llm import run_with_retry
 
 logger = logging.getLogger(__name__)
@@ -38,10 +39,6 @@ class AudioGenerationService:
         "语气不端着、不拖慢，和男主持保持同一档节目质感。"
     )
 
-    # ── 预置音色（降级方案） ────────────────────────────────────────
-    _VOICE_HOST = "苏打"
-    _VOICE_GUEST = "茉莉"
-
     # ── 导演模式角色描述 ────────────────────────────────────────────
     _DIRECTOR_HOST = (
         "角色：年轻成年男性播客主持人，亲和、好奇、善于追问，"
@@ -64,6 +61,12 @@ class AudioGenerationService:
         self._output_dir = Path(config.audio_output_dir)
         self._ensure_output_dir()
         self._use_voice_design = bool(config.enable_tts_voice_design and config.tts_voice_design_model)
+        # 缓存 TTS 客户端，避免每次调用都创建新实例
+        self._tts_client = OpenAI(
+            api_key=config.tts_api_key,
+            base_url=config.tts_base_url,
+            max_retries=0,
+        )
 
     def _ensure_output_dir(self) -> None:
         if not self._output_dir.exists():
@@ -91,8 +94,8 @@ class AudioGenerationService:
         for index, turn in enumerate(script):
             role = turn.get("role", "")
             content = turn.get("content", "")
-            emotion = turn.get("emotion", "")
-            audio_tag = turn.get("audio_tag", "")
+            emotion = self._normalize_emotion(turn.get("emotion", ""))
+            audio_tag = self._normalize_audio_tag(turn.get("audio_tag", ""))
 
             if not role or not content:
                 continue
@@ -107,20 +110,22 @@ class AudioGenerationService:
 
             logger.info("[TTS %d/%d] %s: %s (emotion=%s)", index + 1, total, role, content[:20], emotion)
 
-            if self._call_tts_api(content, role, emotion, audio_tag, file_path, conversation_context):
-                generated_files.append(str(file_path))
-                logger.info("[TTS %d/%d] %s 语音生成成功", index + 1, total, role)
-
-                if cancel_event and cancel_event.is_set():
-                    break
-
-                if progress_callback:
-                    content_preview = content[:30] + "..." if len(content) > 30 else content
-                    should_continue = progress_callback(index + 1, total, role, content_preview)
-                    if should_continue is False:
-                        break
-            else:
+            try:
+                self._call_tts_api(content, role, emotion, audio_tag, file_path, conversation_context)
+            except TTSError:
                 logger.error("[TTS %d/%d] %s 语音生成失败", index + 1, total, role)
+                continue
+            generated_files.append(str(file_path))
+            logger.info("[TTS %d/%d] %s 语音生成成功", index + 1, total, role)
+
+            if cancel_event and cancel_event.is_set():
+                break
+
+            if progress_callback:
+                content_preview = content[:30] + "..." if len(content) > 30 else content
+                should_continue = progress_callback(index + 1, total, role, content_preview)
+                if should_continue is False:
+                    break
 
         logger.info("Generated %d audio files for task %s", len(generated_files), task_id)
         return generated_files
@@ -150,7 +155,7 @@ class AudioGenerationService:
 
         if emotion:
             direction = (
-                f"指导：参考情绪“{self._normalize_emotion(emotion)}”，"
+                f"指导：参考情绪“{emotion}”，"
                 "但只做轻微表达变化，保持语速和音量稳定。"
             )
         else:
@@ -158,7 +163,7 @@ class AudioGenerationService:
 
         tag_instruction = ""
         if audio_tag:
-            normalized_tag = self._normalize_audio_tag(audio_tag)
+            normalized_tag = audio_tag
             if normalized_tag:
                 tag_instruction = f"\n细节：可轻微体现“{normalized_tag}”的口播效果，但不要把标签念出来。"
 
@@ -199,11 +204,9 @@ class AudioGenerationService:
 
     @staticmethod
     def _embed_audio_tag(content: str, audio_tag: str) -> str:
-        """将音频标签嵌入到文本开头。"""
+        """将音频标签嵌入到文本开头（调用方需保证 audio_tag 已 normalize）。"""
         if audio_tag:
-            normalized_tag = AudioGenerationService._normalize_audio_tag(audio_tag)
-            if normalized_tag:
-                return f"[{normalized_tag}]{content}"
+            return f"[{audio_tag}]{content}"
         return content
 
     @staticmethod
@@ -254,8 +257,8 @@ class AudioGenerationService:
     def _get_preset_voice(self, role: str) -> str:
         """获取预置音色名称（降级方案）。"""
         if self._is_guest_role(role):
-            return self._VOICE_GUEST
-        return self._VOICE_HOST
+            return self._config.tts_preset_voice_guest
+        return self._config.tts_preset_voice_host
 
     @staticmethod
     def _is_host_role(role: str) -> bool:
@@ -284,11 +287,7 @@ class AudioGenerationService:
             return True
 
         try:
-            client = OpenAI(
-                api_key=self._config.tts_api_key,
-                base_url=self._config.tts_base_url,
-                max_retries=0,
-            )
+            client = self._tts_client
 
             # 构建导演模式 style 指令
             style_instruction = self._build_director_instruction(role, emotion, audio_tag, conversation_context)
@@ -343,4 +342,4 @@ class AudioGenerationService:
 
         except Exception as e:
             logger.exception("Exception during MiMo TTS API call: %s", e)
-            return False
+            raise TTSError(f"TTS 语音合成失败: {e}") from e

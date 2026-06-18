@@ -4,12 +4,11 @@ const baseURL =
 export interface ResearchRequest {
   topic: string;
   search_depth?: "quick" | "deep";
-  podcast_duration?: "short" | "standard" | "deep";
+  podcast_duration?: "short" | "standard" | "long";
   podcast_style?: "plain" | "professional" | "news";
   production_mode?: "quick" | "deep";
   enable_intro_bgm?: boolean;
-  llm_model_id?: "deepseek-v4-flash" | "deepseek-v4-pro";
-  llm_reasoning_effort?: "high" | "max";
+
 }
 
 export type HealthStatus = "ok" | "warning" | "error";

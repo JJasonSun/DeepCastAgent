@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, field_validator
 # Define backend root directory
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
+# 默认 LLM 模型标识符，统一在一处定义，避免三处硬编码
+_DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+_PRO_LLM_MODEL = "deepseek-v4-pro"
+
 class SearchAPI(Enum):
     """搜索 API 提供商的枚举。
 
@@ -67,7 +71,7 @@ class Configuration(BaseModel):
         description="使用自定义 OpenAI 兼容服务时的可选基础 URL",
     )
     llm_model_id: str | None = Field(
-        default="deepseek-v4-flash",
+        default=_DEFAULT_LLM_MODEL,
         title="LLM 模型 ID",
         description="当前任务使用的 DeepSeek 模型 ID",
     )
@@ -100,6 +104,16 @@ class Configuration(BaseModel):
         default=False,
         title="启用 TTS 音色设计",
         description="是否使用 VoiceDesign 模型；默认使用预置音色以获得更稳定的真人感",
+    )
+    tts_preset_voice_host: str = Field(
+        default="苏打",
+        title="Host 预置音色",
+        description="播客主持人（Host）的预置音色名称",
+    )
+    tts_preset_voice_guest: str = Field(
+        default="茉莉",
+        title="Guest 预置音色",
+        description="播客嘉宾（Guest）的预置音色名称",
     )
     audio_output_dir: str = Field(
         default=str(BACKEND_ROOT / "output" / "audio"),
@@ -266,6 +280,11 @@ class Configuration(BaseModel):
         title="报告大纲最大生成次数",
         description="用户可触发的大纲生成次数上限",
     )
+    report_outline_timeout_seconds: int = Field(
+        default=300,
+        title="报告大纲确认超时",
+        description="等待用户确认报告大纲的最大秒数，超时后自动使用当前大纲继续",
+    )
     podcast_script_target_turns: str = Field(
         default="16-20",
         title="脚本目标轮次",
@@ -320,6 +339,45 @@ class Configuration(BaseModel):
             raise ValueError("podcast_style must be 'plain', 'professional' or 'news'")
         return v
 
+
+    @classmethod
+    def apply_production_preset(
+        cls,
+        search_depth: str,
+        podcast_duration: str,
+        podcast_style: str,
+    ) -> dict[str, Any]:
+        """将用户语义参数展开为底层 config 覆盖字典。
+
+        Args:
+            search_depth: "quick" 或 "deep"。
+            podcast_duration: "short"、"standard" 或 "long"。
+            podcast_style: "plain"、"professional" 或 "news"。
+
+        Returns:
+            可直接传给 from_env(overrides=...) 的字典。
+        """
+        duration_turns = {
+            "short": "6-8",
+            "standard": "12-14",
+            "long": "16-20",
+        }
+        turns = duration_turns.get(podcast_duration, "12-14")
+        is_deep = search_depth == "deep"
+        return {
+            "production_mode": search_depth,
+            "search_depth": search_depth,
+            "llm_model_id": _DEFAULT_LLM_MODEL if search_depth == "quick" else _PRO_LLM_MODEL,
+            "llm_reasoning_effort": "high" if search_depth == "quick" else "max",
+            "max_research_refine_rounds": 0 if search_depth == "quick" else 2,
+            "max_report_refine_rounds": 0 if search_depth == "quick" else 1,
+            "enable_report_outline": is_deep,
+            "enable_script_blueprint": is_deep,
+            "require_report_outline_confirmation": is_deep,
+            "podcast_script_target_turns": turns,
+            "podcast_style": podcast_style,
+        }
+
     @classmethod
     def from_env(cls, overrides: dict[str, Any] | None = None) -> "Configuration":
         """
@@ -371,4 +429,4 @@ class Configuration(BaseModel):
 
     def active_llm_model(self) -> str:
         """返回当前任务实际使用的 LLM 模型。"""
-        return self.llm_model_id or "deepseek-v4-flash"
+        return self.llm_model_id or _DEFAULT_LLM_MODEL

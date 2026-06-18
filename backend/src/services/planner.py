@@ -8,6 +8,7 @@ from typing import Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError
 from models import SummaryState, TodoItem
 from prompts import (
     get_current_date,
@@ -16,7 +17,7 @@ from prompts import (
     todo_planner_instructions,
     todo_planner_system_prompt,
 )
-from services.llm import call_llm_json
+from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 MAX_REFINE_TASKS = 3
@@ -120,7 +121,7 @@ class PlanningService:
     """使用 OpenAI SDK 结构化输出生成 TODO 项目。"""
 
     def __init__(self, client: OpenAI, config: Configuration) -> None:
-        self._client = client
+        self._client = LLMClient(client, config)
         self._config = config
 
     def plan_todo_list(
@@ -139,20 +140,20 @@ class PlanningService:
             research_topic=state.research_topic,
             historical_context=historical_context,
         )
-        extra_body = self._config.build_thinking_body(enable=False)
 
-        result = call_llm_json(
-            client=self._client,
-            system_prompt=todo_planner_system_prompt.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            json_schema=PLANNER_JSON_SCHEMA,
-            schema_name="research_tasks",
-            extra_body=extra_body,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-            timeout=self._config.llm_long_timeout,
-        )
+        try:
+            result = self._client.chat_json(
+                todo_planner_system_prompt.strip(),
+                prompt,
+                PLANNER_JSON_SCHEMA,
+                schema_name="research_tasks",
+                timeout=self._config.llm_long_timeout,
+            )
+        except DeepCastError as exc:
+            logger.warning("Planner failed; using fallback task: %s", exc)
+            fallback = self.create_fallback_task(state)
+            state.todo_items = [fallback]
+            return [fallback]
 
         # 结构化输出保证 JSON 格式正确，直接提取 tasks 数组
         tasks_payload: list[dict[str, Any]] = []
@@ -217,26 +218,23 @@ class PlanningService:
             existing_summaries=existing_summaries,
             previous_queries=previous_queries,
         )
-        extra_body = self._config.build_thinking_body(enable=True)
-        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
-        result = call_llm_json(
-            client=self._client,
-            system_prompt=research_analyzer_system_prompt.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            json_schema=REFINE_JSON_SCHEMA,
-            schema_name="refine_decision",
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-            timeout=self._config.llm_long_timeout,
-            response_transform=self._normalize_refine_result,
-        )
+        try:
+            result = self._client.chat_json(
+                research_analyzer_system_prompt.strip(),
+                prompt,
+                REFINE_JSON_SCHEMA,
+                schema_name="refine_decision",
+                enable_thinking=True,
+                timeout=self._config.llm_long_timeout,
+                response_transform=self._normalize_refine_result,
+            )
+        except DeepCastError as exc:
+            logger.warning("Refine analysis failed; stopping refinement: %s", exc)
+            return False, "分析失败，停止精炼", []
 
-        if not result or not isinstance(result, dict):
-            logger.warning("Refine analysis returned no result, stopping")
+        if not isinstance(result, dict):
+            logger.warning("Refine analysis returned non-dict result, stopping")
             return False, "分析失败，停止精炼", []
 
         should_continue = bool(result.get("continue_search", False))

@@ -36,3 +36,12 @@ def strip_tool_calls(text: str) -> str:
         i = j + 1  # 跳过闭合的 ]
     return "".join(result)
 
+def strip_thinking_tokens(text: str) -> str:
+    """移除模型响应中的 ````</think> ```` 部分。"""
+    open_tag = "<think>"
+    close_tag = "</think>"
+    while open_tag in text and close_tag in text:
+        start = text.find(open_tag)
+        end = text.find(close_tag) + len(close_tag)
+        text = text[:start] + text[end:]
+    return text

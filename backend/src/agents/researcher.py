@@ -10,9 +10,9 @@ from models import SummaryState, TodoItem
 from services.search import (
     dispatch_search,
     filter_search_results,
+    prepare_research_context,
     sort_by_authority,
 )
-from services.search import prepare_research_context
 from services.summarizer import SummarizationService
 
 

@@ -9,8 +9,9 @@ from typing import Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError, SearchError
 from prompts import search_result_filter_instructions
-from services.llm import call_llm_json, run_with_retry
+from services.llm import LLMClient, run_with_retry
 from utils import (
     deduplicate_and_format_sources,
     format_sources,
@@ -21,22 +22,37 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
 
-_tavily_client = None
-_search_lock = threading.Lock()
+class _TavilyClientFactory:
+    """延迟初始化 Tavily 客户端（线程安全，可重置）。"""
+
+    def __init__(self) -> None:
+        self._client = None
+        self._lock = threading.Lock()
+
+    def get(self, config: Configuration):
+        """返回已缓存的 TavilyClient，按需创建。"""
+        if self._client is None and config.tavily_api_key:
+            with self._lock:
+                if self._client is None:
+                    try:
+                        from tavily import TavilyClient
+                        self._client = TavilyClient(api_key=config.tavily_api_key)
+                    except ImportError:
+                        logger.warning("tavily-python 未安装，Tavily 搜索不可用")
+        return self._client
+
+    def reset(self) -> None:
+        """重置客户端（用于测试）。"""
+        with self._lock:
+            self._client = None
+
+
+_tavily_factory = _TavilyClientFactory()
 
 
 def _get_tavily_client(config: Configuration):
-    """延迟初始化 Tavily 客户端（线程安全）。"""
-    global _tavily_client
-    if _tavily_client is None and config.tavily_api_key:
-        with _search_lock:
-            if _tavily_client is None:
-                try:
-                    from tavily import TavilyClient
-                    _tavily_client = TavilyClient(api_key=config.tavily_api_key)
-                except ImportError:
-                    logger.warning("tavily-python 未安装，Tavily 搜索不可用")
-    return _tavily_client
+    """延迟初始化 Tavily 客户端（委托给工厂实例）。"""
+    return _tavily_factory.get(config)
 
 
 def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> list[dict[str, Any]]:
@@ -143,7 +159,7 @@ def dispatch_search(
             backend_label = "hybrid"
     except Exception as exc:
         logger.exception("Search backend %s failed: %s", search_api, exc)
-        raise
+        raise SearchError(f"搜索后端 {search_api} 调用失败: {exc}") from exc
 
     if not results:
         notices.append(f"搜索后端 {backend_label} 未返回结果")
@@ -237,22 +253,22 @@ def filter_search_results(
         research_topic=research_topic,
         search_results="\n\n".join(results_text),
     )
-    extra_body = config.build_thinking_body(enable=False)
 
-    filter_result = call_llm_json(
-        client=client,
-        system_prompt="你是一名信息筛选专家。",
-        user_prompt=prompt,
-        model=config.active_llm_model(),
-        json_schema=FILTER_JSON_SCHEMA,
-        schema_name="search_filter",
-        extra_body=extra_body,
-        max_retries=config.llm_max_retries,
-        retry_base_delay=config.llm_retry_base_delay,
-    )
+    llm_client = LLMClient(client, config)
 
-    if not filter_result or not isinstance(filter_result, dict):
-        logger.warning("Search filter returned no result, keeping all results")
+    try:
+        filter_result = llm_client.chat_json(
+            "你是一名信息筛选专家。",
+            prompt,
+            FILTER_JSON_SCHEMA,
+            schema_name="search_filter",
+        )
+    except DeepCastError as exc:
+        logger.warning("Search filter failed; keeping all results: %s", exc)
+        return results
+
+    if not isinstance(filter_result, dict):
+        logger.warning("Search filter returned non-dict result, keeping all results")
         return results
 
     # 根据评估结果过滤

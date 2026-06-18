@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from queue import Empty, Queue
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import AudioSynthesisError, DeepCastError, ReportError, ScriptError
 from models import SummaryState, SummaryStateOutput, TodoItem
 from services.audio_generator import AudioGenerationService
 from services.audio_synthesizer import PodcastSynthesisService
@@ -59,10 +61,11 @@ class DeepResearchAgent:
         self._outline_action: str | None = None
         self._waiting_for_outline_confirmation = False
 
-        # 服务层（直接注入 OpenAI 客户端）
+        # 服务层（直接注入 OpenAI 客户端；reporter 需要 LLMClient 封装）
         self.planner = PlanningService(self.smart_client, self.config)
         self.summarizer = SummarizationService(self.fast_client, self.config)
-        self.reporting = ReportingService(self.smart_client, self.config)
+        from services.llm import LLMClient
+        self.reporting = ReportingService(LLMClient(self.smart_client, self.config), self.config)
         self.script_generator = ScriptGenerationService(self.config)
         self.audio_generator = AudioGenerationService(self.config)
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
@@ -196,7 +199,10 @@ class DeepResearchAgent:
         audio_files = self.audio_generator.generate_audio(script, task_id)
 
         # 合成播客
-        self.podcast_synthesizer.synthesize_podcast(audio_files, task_id)
+        try:
+            self.podcast_synthesizer.synthesize_podcast(audio_files, task_id)
+        except AudioSynthesisError:
+            logger.error("播客合成失败，跳过")
 
         return SummaryStateOutput(
             running_summary=report,
@@ -225,8 +231,8 @@ class DeepResearchAgent:
         yield {"type": "status", "message": "初始化研究流程"}
 
         # 检索相关历史记忆
-        self._historical_context = self._retrieve_historical_context(topic)
-        if self._historical_context:
+        historical_context = self._retrieve_historical_context(topic)
+        if historical_context:
             yield {"type": "log", "message": "📚 [MEMORY] 已加载相关历史研究记忆"}
 
         if self.is_cancelled():
@@ -234,7 +240,7 @@ class DeepResearchAgent:
             return
 
         # Phase 1: 规划 + 并行研究
-        yield from self._stream_research_phase(state)
+        yield from self._stream_research_phase(state, historical_context=historical_context)
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -246,13 +252,21 @@ class DeepResearchAgent:
             return
 
         # Phase 2: 报告生成（含 Self-Refine 精炼）
-        yield from self._stream_report_phase(state)
+        try:
+            yield from self._stream_report_phase(state)
+        except DeepCastError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
 
         # Phase 3: 播客脚本
-        script_turns = yield from self._stream_script_phase(state)
+        try:
+            script_turns = yield from self._stream_script_phase(state)
+        except DeepCastError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -269,11 +283,12 @@ class DeepResearchAgent:
     # 流式阶段方法
     # ------------------------------------------------------------------
 
-    def _stream_research_phase(self, state: SummaryState) -> Iterator[dict[str, Any]]:
+    def _stream_research_phase(
+        self, state: SummaryState, *, historical_context: str = "",
+    ) -> Iterator[dict[str, Any]]:
         """Phase 1: 规划任务并行执行搜索 + 总结。"""
         if self.is_cancelled():
             return
-        historical_context = getattr(self, "_historical_context", "")
         plan_result = self.director.dispatch(
             "planner",
             {
@@ -285,8 +300,7 @@ class DeepResearchAgent:
         state.todo_items = plan_result.data.get("tasks", []) if plan_result.success else []
         if self.is_cancelled():
             return
-        for event in self._drain_tool_events(state, step=0):
-            yield event
+        yield from self._drain_tool_events(state, step=0)
         if not state.todo_items:
             fallback_result = self.director.dispatch(
                 "planner",
@@ -308,6 +322,30 @@ class DeepResearchAgent:
             "step": 0,
         }
 
+        yield from self._run_parallel_tasks(
+            state.todo_items, channel_map, state,
+            error_label="Task",
+        )
+
+    def _run_parallel_tasks(
+        self,
+        tasks: list[TodoItem],
+        channel_map: dict[int, dict[str, Any]],
+        state: SummaryState,
+        *,
+        error_label: str = "Task",
+    ) -> Iterator[dict[str, Any]]:
+        """并行执行任务列表，通过队列流式输出事件。
+
+        Args:
+            tasks: 待执行的任务列表。
+            channel_map: 任务 ID → {step, token} 映射。
+            state: 共享的研究状态。
+            error_label: 日志中使用的任务阶段标签。
+
+        Yields:
+            除内部 __task_done__ 外的所有事件。
+        """
         event_queue: Queue[dict[str, Any]] = Queue()
 
         def enqueue(
@@ -338,52 +376,48 @@ class DeepResearchAgent:
                 if self.is_cancelled():
                     enqueue({"type": "__task_done__", "task_id": task.id})
                     return
-                enqueue(
-                    {
-                        "type": "task_status",
-                        "task_id": task.id,
-                        "status": "in_progress",
-                        "title": task.title,
-                        "intent": task.intent,
-                        "query": task.query,
-                        "note_id": task.note_id,
-                        "note_path": task.note_path,
-                    },
-                    task=task,
-                )
+                in_progress_event: dict[str, Any] = {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "status": "in_progress",
+                    "title": task.title,
+                    "intent": task.intent,
+                    "query": task.query,
+                }
+                if self.note_tool is not None:
+                    in_progress_event["note_id"] = task.note_id
+                    in_progress_event["note_path"] = task.note_path
+                enqueue(in_progress_event, task=task)
                 for event in self._execute_task(state, task, emit_stream=True, step=step):
                     if self.is_cancelled():
                         break
                     enqueue(event, task=task)
             except Exception as exc:
-                if self.is_cancelled():
-                    logger.info("Task %s cancelled", task.id)
-                else:
-                    logger.exception("Task execution failed", exc_info=exc)
-                enqueue(
-                    {
-                        "type": "task_status",
-                        "task_id": task.id,
-                        "status": "failed",
-                        "detail": str(exc),
-                        "title": task.title,
-                        "intent": task.intent,
-                        "query": task.query,
-                        "note_id": task.note_id,
-                        "note_path": task.note_path,
-                    },
-                    task=task,
-                )
+                if not self.is_cancelled():
+                    logger.exception("%s execution failed", error_label, exc_info=exc)
+                failed_event: dict[str, Any] = {
+                    "type": "task_status",
+                    "task_id": task.id,
+                    "status": "failed",
+                    "detail": str(exc),
+                    "title": task.title,
+                    "intent": task.intent,
+                    "query": task.query,
+                }
+                if self.note_tool is not None:
+                    failed_event["note_id"] = task.note_id
+                    failed_event["note_path"] = task.note_path
+                enqueue(failed_event, task=task)
             finally:
                 enqueue({"type": "__task_done__", "task_id": task.id})
 
-        for task in state.todo_items:
+        for task in tasks:
             step = channel_map.get(task.id, {}).get("step", 0)
             thread = Thread(target=worker, args=(task, step), daemon=True)
             threads.append(thread)
             thread.start()
 
-        active_workers = len(state.todo_items)
+        active_workers = len(tasks)
         finished_workers = 0
 
         try:
@@ -482,7 +516,7 @@ class DeepResearchAgent:
 
             yield {
                 "type": "log",
-                "message": f"正在生成报告大纲，等待用户确认（第 {attempt}/{max_attempts} 次）...",
+                "message": f"正在生成报告大纲（第 {attempt}/{max_attempts} 次），LLM 深度思考中，请稍候...",
             }
             outline = self.reporting.generate_report_outline(state)
             if not outline:
@@ -502,7 +536,6 @@ class DeepResearchAgent:
                 "max_attempts": max_attempts,
                 "message": "报告大纲已生成，请确认后继续制作，或重新生成大纲。",
             }
-            yield {"type": "log", "message": "报告大纲已生成，正在等待用户确认..."}
 
             action = self._wait_for_report_outline_action()
             with self._outline_action_lock:
@@ -513,22 +546,27 @@ class DeepResearchAgent:
             if self.is_cancelled():
                 return None
             if action == "approve":
-                yield {"type": "log", "message": "用户已确认报告大纲，继续撰写正式报告"}
+                yield {"type": "log", "message": "✅ 已确认报告大纲，继续撰写正式报告"}
                 return outline
             if action == "regenerate":
                 if attempt >= max_attempts:
-                    yield {"type": "log", "message": "报告大纲已达到重新生成次数上限，将使用当前大纲继续"}
+                    yield {"type": "log", "message": "已达到重新生成次数上限，使用当前大纲继续"}
                     return outline
-                yield {"type": "log", "message": "用户请求重新生成报告大纲"}
+                yield {"type": "log", "message": "🔄 用户请求重新生成报告大纲"}
                 attempt += 1
                 continue
 
         return last_outline
 
     def _wait_for_report_outline_action(self) -> str | None:
-        """等待前端提交报告大纲动作，同时响应取消。"""
+        """等待前端提交报告大纲动作，同时响应取消和超时。"""
+        deadline = time.monotonic() + max(10, self.config.report_outline_timeout_seconds)
         while not self.is_cancelled():
-            if not self._outline_action_event.wait(timeout=0.5):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.info("报告大纲确认超时（%d 秒），自动使用当前大纲继续", self.config.report_outline_timeout_seconds)
+                return "approve"
+            if not self._outline_action_event.wait(timeout=min(0.5, remaining)):
                 continue
             with self._outline_action_lock:
                 action = self._outline_action
@@ -600,105 +638,13 @@ class DeepResearchAgent:
                 "round": round_num + 1,
             }
 
-            # 并行执行补充任务（复用 _stream_research_phase 的并行模式）
-            event_queue: Queue[dict[str, Any]] = Queue()
-
-            def enqueue(
-                event: dict[str, Any],
-                *,
-                task: TodoItem | None = None,
-                step_override: int | None = None,
-            ) -> None:
-                payload = dict(event)
-                target_task_id = payload.get("task_id")
-                if task is not None:
-                    target_task_id = task.id
-                    payload["task_id"] = task.id
-                channel = channel_map.get(target_task_id) if target_task_id is not None else None
-                if channel:
-                    payload.setdefault("step", channel["step"])
-                    payload["stream_token"] = channel["token"]
-                if step_override is not None:
-                    payload["step"] = step_override
-                event_queue.put(payload)
-
-            self._set_tool_event_sink(lambda ev: enqueue(ev))
-
-            threads: list[Thread] = []
-
-            def worker(task: TodoItem, step: int) -> None:
-                try:
-                    if self.is_cancelled():
-                        enqueue({"type": "__task_done__", "task_id": task.id})
-                        return
-                    enqueue(
-                        {
-                            "type": "task_status",
-                            "task_id": task.id,
-                            "status": "in_progress",
-                            "title": task.title,
-                            "intent": task.intent,
-                            "query": task.query,
-                        },
-                        task=task,
-                    )
-                    for event in self._execute_task(state, task, emit_stream=True, step=step):
-                        if self.is_cancelled():
-                            break
-                        enqueue(event, task=task)
-                except Exception as exc:
-                    if not self.is_cancelled():
-                        logger.exception("Refine task execution failed", exc_info=exc)
-                    enqueue(
-                        {
-                            "type": "task_status",
-                            "task_id": task.id,
-                            "status": "failed",
-                            "detail": str(exc),
-                            "title": task.title,
-                            "intent": task.intent,
-                            "query": task.query,
-                        },
-                        task=task,
-                    )
-                finally:
-                    enqueue({"type": "__task_done__", "task_id": task.id})
-
+            # 并行执行补充任务
             for task in new_tasks:
                 state.todo_items.append(task)
-                step = channel_map.get(task.id, {}).get("step", 0)
-                thread = Thread(target=worker, args=(task, step), daemon=True)
-                threads.append(thread)
-                thread.start()
-
-            active_workers = len(new_tasks)
-            finished_workers = 0
-
-            try:
-                while finished_workers < active_workers:
-                    try:
-                        event = event_queue.get(timeout=0.5)
-                    except Empty:
-                        if self.is_cancelled():
-                            yield {"type": "cancelled", "message": "研究任务已取消"}
-                            return
-                        continue
-                    if event.get("type") == "__task_done__":
-                        finished_workers += 1
-                        continue
-                    yield event
-
-                while True:
-                    try:
-                        event = event_queue.get_nowait()
-                    except Empty:
-                        break
-                    if event.get("type") != "__task_done__":
-                        yield event
-            finally:
-                self._set_tool_event_sink(None)
-                for thread in threads:
-                    thread.join(timeout=1.0)
+            yield from self._run_parallel_tasks(
+                new_tasks, channel_map, state,
+                error_label="Refine task",
+            )
 
             # 智能终止：检查信息重复度
             completed_new = [t for t in new_tasks if t.status == "completed" and t.summary]
@@ -845,7 +791,7 @@ class DeepResearchAgent:
             },
         )
         if not script_result.success:
-            raise RuntimeError("脚本生成失败：模型未返回合法播客脚本，已停止后续音频生成。")
+            raise ScriptError("脚本生成失败：模型未返回合法播客脚本，已停止后续音频生成。")
 
         script = script_result.data.get("script", [])
         if self.is_cancelled():
@@ -855,7 +801,7 @@ class DeepResearchAgent:
 
         script_turns = len(script) if script else 0
         if script_turns == 0:
-            raise RuntimeError("脚本生成失败：模型返回空脚本，已停止后续音频生成。")
+            raise ScriptError("脚本生成失败：模型返回空脚本，已停止后续音频生成。")
 
         yield {"type": "log", "message": f"脚本生成完成，共 {script_turns} 轮对话"}
         yield {
@@ -874,7 +820,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise ReportError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         if not current_report or self.config.max_report_refine_rounds <= 0:
             return current_report
 
@@ -930,7 +876,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise RuntimeError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise ReportError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         events.append({"type": "log", "message": f"报告初稿生成完成，共 {len(current_report)} 字符"})
 
         if not current_report or self.config.max_report_refine_rounds <= 0:
@@ -1107,14 +1053,18 @@ class DeepResearchAgent:
             return
 
         yield {"type": "log", "message": "使用 FFmpeg 拼接所有语音片段..."}
-        podcast_file = self.podcast_synthesizer.synthesize_podcast(
-            audio_files, task_id, cancel_check=self.is_cancelled,
-        )
+        try:
+            podcast_file = self.podcast_synthesizer.synthesize_podcast(
+                audio_files, task_id, cancel_check=self.is_cancelled,
+            )
+        except AudioSynthesisError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if podcast_file:
             yield {"type": "podcast_ready", "file": podcast_file}
             yield {"type": "log", "message": f"播客文件生成成功: {podcast_file}"}
         else:
-            yield {"type": "log", "message": "播客合成失败，请检查 FFmpeg 配置"}
+            yield {"type": "log", "message": "播客合成已跳过（无有效音频片段或已取消）"}
 
     # ------------------------------------------------------------------
     # 执行助手

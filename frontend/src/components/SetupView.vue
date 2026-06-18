@@ -110,7 +110,7 @@
                 <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'standard' }" @click="podcastDuration = 'standard'">
                   标准
                 </button>
-                <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'deep' }" @click="podcastDuration = 'deep'">
+                <button type="button" class="setup-segment" :class="{ active: podcastDuration === 'long' }" @click="podcastDuration = 'long'">
                   深度
                 </button>
               </div>
@@ -186,7 +186,7 @@ import type { HealthCheckItem, HealthCheckResponse, HealthStatus } from "../serv
 
 const topic = defineModel<string>("topic", { required: true });
 const searchDepth = defineModel<"quick" | "deep">("searchDepth", { required: true });
-const podcastDuration = defineModel<"short" | "standard" | "deep">("podcastDuration", { required: true });
+const podcastDuration = defineModel<"short" | "standard" | "long">("podcastDuration", { required: true });
 const podcastStyle = defineModel<"plain" | "professional" | "news">("podcastStyle", { required: true });
 const enableIntroBgm = defineModel<boolean>("enableIntroBgm", { required: true });
 

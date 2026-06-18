@@ -11,9 +11,10 @@ from typing import Any
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError
 from models import SummaryState
 from prompts import memory_extraction_instructions
-from services.llm import call_llm_json
+from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ class MemoryManager:
 
     def __init__(self, config: Configuration, client: OpenAI | None = None) -> None:
         self._config = config
-        self._client = client
+        # 只有当传入 OpenAI 客户端时才构造 LLMClient，否则保持 None（走简单提取）
+        self._client: LLMClient | None = (
+            LLMClient(client, config) if client is not None else None
+        )
         self._memory_dir = Path(config.notes_workspace).parent / "memory"
         self._memory_dir.mkdir(parents=True, exist_ok=True)
         self._index_file = self._memory_dir / "memory_index.json"
@@ -254,24 +258,22 @@ class MemoryManager:
             research_topic=topic,
             research_summary=summary[:3000],  # 限制长度避免 token 过多
         )
-        extra_body = self._config.build_thinking_body(enable=False)
 
-        result = call_llm_json(
-            client=self._client,
-            system_prompt="你是一名信息提取专家。",
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            json_schema=MEMORY_EXTRACTION_SCHEMA,
-            schema_name="memory_extraction",
-            extra_body=extra_body,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-        )
+        try:
+            result = self._client.chat_json(
+                "你是一名信息提取专家。",
+                prompt,
+                MEMORY_EXTRACTION_SCHEMA,
+                schema_name="memory_extraction",
+            )
+        except DeepCastError as exc:
+            logger.warning("LLM memory extraction failed, falling back to simple extraction: %s", exc)
+            return self._extract_memory_simple(topic, summary)
 
         if isinstance(result, dict):
             return result
 
-        logger.warning("LLM memory extraction failed, falling back to simple extraction")
+        logger.warning("LLM memory extraction returned unexpected type, falling back to simple extraction")
         return self._extract_memory_simple(topic, summary)
 
     @staticmethod
