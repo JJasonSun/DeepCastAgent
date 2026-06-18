@@ -173,69 +173,74 @@
         <!-- Right Column: Logs & Output -->
         <div class="lg:col-span-3 flex flex-col gap-4">
 
-          <!-- Report Outline Review -->
-          <section v-if="reportOutlineReview" class="outline-panel">
-            <div class="outline-header">
-              <div>
-                <p class="outline-eyebrow">报告大纲确认</p>
-                <h3 class="outline-title">{{ reportOutlineReview.outline.title || "待确认报告大纲" }}</h3>
-              </div>
-              <span class="outline-badge">第 {{ reportOutlineReview.attempt }}/{{ reportOutlineReview.maxAttempts }} 次</span>
-            </div>
-
-            <div class="outline-summary">
-              <div>
-                <span>读者问题</span>
-                <p>{{ reportOutlineReview.outline.reader_question || "暂无" }}</p>
-              </div>
-              <div>
-                <span>核心主线</span>
-                <p>{{ reportOutlineReview.outline.thesis || "暂无" }}</p>
-              </div>
-            </div>
-
-            <div v-if="reportOutlineReview.outline.sections?.length" class="outline-sections">
-              <article
-                v-for="(section, index) in reportOutlineReview.outline.sections"
-                :key="`${section.heading || 'section'}-${index}`"
-                class="outline-section"
-              >
-                <div class="outline-section-index">{{ index + 1 }}</div>
-                <div class="min-w-0">
-                  <h4>{{ section.heading || `章节 ${index + 1}` }}</h4>
-                  <p v-if="section.purpose">{{ section.purpose }}</p>
-                  <ul v-if="section.key_claims?.length">
-                    <li v-for="claim in section.key_claims.slice(0, 2)" :key="claim">{{ claim }}</li>
-                  </ul>
+          <!-- Report Outline Review (Modal) -->
+          <dialog ref="outlineModalRef" class="modal">
+            <div v-if="reportOutlineReview" class="modal-box outline-panel">
+              <div class="outline-header">
+                <div>
+                  <p class="outline-eyebrow">报告大纲确认</p>
+                  <h3 class="outline-title">{{ reportOutlineReview.outline.title || "待确认报告大纲" }}</h3>
                 </div>
-              </article>
-            </div>
+                <span class="outline-badge">第 {{ reportOutlineReview.attempt }}/{{ reportOutlineReview.maxAttempts }} 次</span>
+              </div>
 
-            <div v-if="reportOutlineReview.outline.source_risks?.length" class="outline-risks">
-              <span>来源风险</span>
-              <p>{{ reportOutlineReview.outline.source_risks.join("；") }}</p>
-            </div>
+              <div class="outline-summary">
+                <div>
+                  <span>读者问题</span>
+                  <p>{{ reportOutlineReview.outline.reader_question || "暂无" }}</p>
+                </div>
+                <div>
+                  <span>核心主线</span>
+                  <p>{{ reportOutlineReview.outline.thesis || "暂无" }}</p>
+                </div>
+              </div>
 
-            <div class="outline-actions">
-              <button
-                class="outline-action-primary"
-                :disabled="outlineActionLoading !== null"
-                @click="$emit('confirmOutline')"
-              >
-                {{ outlineActionLoading === "approve" ? "继续中..." : "确认继续" }}
-              </button>
-              <button
-                class="outline-action-secondary"
-                :disabled="!canRegenerateOutline || outlineActionLoading !== null"
-                @click="$emit('regenerateOutline')"
-              >
-                {{ outlineActionLoading === "regenerate" ? "生成中..." : "重新生成大纲" }}
-              </button>
-              <button class="outline-action-ghost" :disabled="outlineActionLoading !== null" @click="$emit('cancel')">
-                取消制作
-              </button>
+              <div v-if="reportOutlineReview.outline.sections?.length" class="outline-sections">
+                <article
+                  v-for="(section, index) in reportOutlineReview.outline.sections"
+                  :key="`${section.heading || 'section'}-${index}`"
+                  class="outline-section"
+                >
+                  <div class="outline-section-index">{{ index + 1 }}</div>
+                  <div class="min-w-0">
+                    <h4>{{ section.heading || `章节 ${index + 1}` }}</h4>
+                    <p v-if="section.purpose">{{ section.purpose }}</p>
+                    <ul v-if="section.key_claims?.length">
+                      <li v-for="claim in section.key_claims.slice(0, 2)" :key="claim">{{ claim }}</li>
+                    </ul>
+                  </div>
+                </article>
+              </div>
+
+              <div v-if="reportOutlineReview.outline.source_risks?.length" class="outline-risks">
+                <span>来源风险</span>
+                <p>{{ reportOutlineReview.outline.source_risks.join("；") }}</p>
+              </div>
+
+              <div class="outline-actions">
+                <button
+                  class="outline-action-primary"
+                  :disabled="outlineActionLoading !== null"
+                  @click="$emit('confirmOutline')"
+                >
+                  {{ outlineActionLoading === "approve" ? "继续中..." : "确认继续" }}
+                </button>
+                <button
+                  class="outline-action-secondary"
+                  :disabled="!canRegenerateOutline || outlineActionLoading !== null"
+                  @click="$emit('regenerateOutline')"
+                >
+                  {{ outlineActionLoading === "regenerate" ? "生成中..." : "重新生成大纲" }}
+                </button>
+                <button class="outline-action-ghost" :disabled="outlineActionLoading !== null" @click="$emit('cancel')">
+                  取消制作
+                </button>
+              </div>
             </div>
-          </section>
+            <form method="dialog" class="modal-backdrop">
+              <button></button>
+            </form>
+          </dialog>
 
           <!-- macOS Style Terminal -->
           <TerminalLog ref="terminalRef" :logs="logs" :is-waiting="isWaiting" :waiting-dots="waitingDots" />
@@ -293,7 +298,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, toRef } from "vue";
+import { ref, computed, toRef, watch } from "vue";
 import TerminalLog from "./TerminalLog.vue";
 import type { LogEntry } from "./TerminalLog.vue";
 import type { ReportOutline } from "../services/api";
@@ -378,6 +383,16 @@ const sectionCount = computed(() => props.podcastBlueprint?.sections?.length || 
 const canRegenerateOutline = computed(() => {
   if (!props.reportOutlineReview) return false;
   return props.reportOutlineReview.attempt < props.reportOutlineReview.maxAttempts;
+});
+
+const outlineModalRef = ref<HTMLDialogElement | null>(null);
+
+watch(() => props.reportOutlineReview, (val) => {
+  if (val && !outlineModalRef.value?.open) {
+    outlineModalRef.value?.showModal();
+  } else if (!val && outlineModalRef.value?.open) {
+    outlineModalRef.value?.close();
+  }
 });
 
 const isCancelled = computed(() => props.productionStage === 'cancelled');
@@ -670,13 +685,12 @@ function isStepPending(stepId: ProductionStage) {
 
 /* ── Report Outline Review ── */
 .outline-panel {
-  background: rgba(18, 21, 29, 0.86);
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
+  background: rgba(18, 21, 29, 0.95);
   border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+  max-width: 560px;
+  width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
 }
 .outline-header {
   display: flex;

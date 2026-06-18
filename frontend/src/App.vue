@@ -278,9 +278,7 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     const stage = event.stage;
     const message = event.message || "";
 
-    addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    addLog(`📌 [STAGE] ${stage.toUpperCase()} - ${message}`);
-    addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    addLog(`━━━ [${stage.toUpperCase()}] ${message}`);
 
     if (stage === "report") {
       productionStage.value = "research";

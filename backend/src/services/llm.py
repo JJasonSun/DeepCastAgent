@@ -16,16 +16,18 @@ from openai import (
     RateLimitError,
 )
 
+from errors import DeepCastError
+
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
-class EmptyLLMResponseError(RuntimeError):
+class EmptyLLMResponseError(DeepCastError):
     """LLM 请求成功但返回了空 content，适合作为临时失败重试。"""
 
 
-class StructuredOutputError(RuntimeError):
+class StructuredOutputError(DeepCastError):
     """LLM 返回的结构化输出无法解析或未通过 schema 校验。"""
 
 
@@ -204,7 +206,7 @@ def call_llm(
     retry_base_delay: float = 1.0,
     timeout: float | None = None,
 ) -> str:
-    """同步调用 LLM 并返回完整文本。"""
+    """同步调用 LLM 并返回完整文本（重试耗尽后抛出 EmptyLLMResponseError，不再静默返回空串）。"""
     request_args: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -224,6 +226,7 @@ def call_llm(
         request_args["tool_choice"] = tool_choice
 
     request_args = _compact_request_args(request_args)
+
     def create_completion() -> str:
         response = client.chat.completions.create(**request_args)
         choice = response.choices[0]
@@ -237,16 +240,14 @@ def call_llm(
             raise EmptyLLMResponseError("LLM completion returned empty content")
         return content
 
-    try:
-        return run_with_retry(
-            create_completion,
-            operation_name=f"LLM completion ({model})",
-            max_retries=max_retries,
-            retry_base_delay=retry_base_delay,
-        )
-    except EmptyLLMResponseError:
-        logger.error("LLM completion (%s) returned empty content after retries", model)
-        return ""
+    # 重试耗尽后，run_with_retry 会再次抛出 EmptyLLMResponseError（已是 DeepCastError 子类），
+    # 让调用方根据语义自行决定兜底（如 reporter 把空响应视为生成失败）。
+    return run_with_retry(
+        create_completion,
+        operation_name=f"LLM completion ({model})",
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
+    )
 
 
 def call_llm_json(
@@ -264,8 +265,12 @@ def call_llm_json(
     retry_base_delay: float = 1.0,
     timeout: float | None = None,
     response_transform: Callable[[Any], Any] | None = None,
-) -> dict[str, Any] | list | None:
-    """使用 DeepSeek JSON Output 调用 LLM，返回解析后的 JSON 对象。"""
+) -> dict[str, Any] | list:
+    """使用 DeepSeek JSON Output 调用 LLM，返回解析后的 JSON 对象。
+
+    重试耗尽后抛出 ``EmptyLLMResponseError``（空内容）或 ``StructuredOutputError``
+    （无法解析或 schema 不匹配），二者均为 ``DeepCastError`` 子类，可被 SSE 层统一捕获。
+    """
     json_mode_hint = build_json_mode_instructions(json_schema)
     system_prompt = f"{system_prompt.strip()}\n\n{json_mode_hint}"
     request_args: dict[str, Any] = {
@@ -284,6 +289,7 @@ def call_llm_json(
         request_args["temperature"] = temperature
 
     request_args = _compact_request_args(request_args)
+
     def create_json_completion() -> dict[str, Any] | list:
         response = client.chat.completions.create(**request_args)
         choice = response.choices[0]
@@ -308,19 +314,14 @@ def call_llm_json(
             raise StructuredOutputError("Structured output failed schema validation")
         return parsed
 
-    try:
-        return run_with_retry(
-            create_json_completion,
-            operation_name=f"LLM JSON completion ({model})",
-            max_retries=max_retries,
-            retry_base_delay=retry_base_delay,
-        )
-    except EmptyLLMResponseError:
-        logger.error("LLM JSON completion (%s) returned empty content after retries", model)
-        return None
-    except StructuredOutputError:
-        logger.error("LLM JSON completion (%s) returned invalid structured output after retries", model)
-        return None
+    # 重试耗尽后抛出 EmptyLLMResponseError / StructuredOutputError（均为 DeepCastError 子类），
+    # 调用方可按需捕获并决定是否走兜底路径。
+    return run_with_retry(
+        create_json_completion,
+        operation_name=f"LLM JSON completion ({model})",
+        max_retries=max_retries,
+        retry_base_delay=retry_base_delay,
+    )
 
 
 def stream_llm(
@@ -372,99 +373,83 @@ def stream_llm(
 
 
 class LLMClient:
-    """封装 OpenAI 客户端 + 配置，简化调用方签名。
+    """封装 OpenAI 客户端 + 配置，提供三个签名明确的方法。
 
     用法::
 
         client = LLMClient(openai_client, config)
-        text = client.chat("你是研究助手", "分析量子计算趋势")
+        text = client.chat_text("你是研究助手", "分析量子计算趋势")
         data = client.chat_json("你是分析员", "输出 JSON", json_schema=schema)
-        for chunk in client.stream("你是播客主持", "生成脚本"):
+        for chunk in client.stream_text("你是播客主持", "生成脚本"):
             ...
 
-    原始的 call_llm / call_llm_json / stream_llm 函数仍然保留，
-    供尚未迁移的调用方使用。
+    ``chat_text`` / ``stream_text`` 重试耗尽后会抛出 ``EmptyLLMResponseError``；
+    ``chat_json`` 会抛出 ``EmptyLLMResponseError`` 或 ``StructuredOutputError``。
+    二者均为 ``DeepCastError`` 子类，可被 SSE 层统一捕获。
     """
 
     def __init__(self, client: OpenAI, config: Configuration) -> None:
         self._client = client
         self._config = config
 
-    def chat(
+    def chat_text(
         self,
         system_prompt: str,
         user_prompt: str,
         *,
-        json_schema: dict[str, Any] | None = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
         enable_thinking: bool = False,
-        stream: bool = False,
+        timeout: float | None = None,
         **kwargs: Any,
-    ) -> str | dict[str, Any] | list | None | Generator[str, None, None]:
-        """统一的 LLM 调用入口。
+    ) -> str:
+        """纯文本 LLM 调用，返回完整文本。
 
-        Args:
-            system_prompt: 系统提示词。
-            user_prompt: 用户提示词。
-            json_schema: 提供时启用 JSON Output 模式，返回解析后的 dict/list。
-            temperature: 生成温度。
-            max_tokens: 最大输出 token 数。
-            enable_thinking: 是否启用 DeepSeek 思考模式。
-            stream: 是否流式返回（仅在 json_schema 为 None 时有效）。
-            **kwargs: 传递给底层函数的额外参数（tools, tool_choice 等）。
-
-        Returns:
-            - stream=True: Generator[str]
-            - json_schema 提供: dict | list | None
-            - 否则: str
+        重试耗尽后抛出 ``EmptyLLMResponseError``，调用方需自行决定兜底（如 reporter
+        把空报告视为生成失败）。
         """
-        extra_body = self._config.build_thinking_body(enable=enable_thinking)
-        reasoning_effort = self._config.build_reasoning_effort(enable=enable_thinking)
-        model = self._config.active_llm_model()
-        max_retries = self._config.llm_max_retries
-        retry_base_delay = self._config.llm_retry_base_delay
-
-        if json_schema is not None:
-            return call_llm_json(
-                client=self._client,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=model,
-                json_schema=json_schema,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                reasoning_effort=reasoning_effort,
-                max_retries=max_retries,
-                retry_base_delay=retry_base_delay,
-                **kwargs,
-            )
-        if stream:
-            return stream_llm(
-                client=self._client,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                reasoning_effort=reasoning_effort,
-                max_retries=max_retries,
-                retry_base_delay=retry_base_delay,
-                **kwargs,
-            )
+        # thinking mode 下模型输出更长，自动增加 max_tokens 避免截断
+        if enable_thinking and max_tokens <= 4096:
+            max_tokens = 8192
         return call_llm(
             client=self._client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model=model,
+            model=self._config.active_llm_model(),
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=max_retries,
-            retry_base_delay=retry_base_delay,
+            extra_body=self._config.build_thinking_body(enable=enable_thinking),
+            reasoning_effort=self._config.build_reasoning_effort(enable=enable_thinking),
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    def stream_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        enable_thinking: bool = False,
+        timeout: float | None = None,
+        **kwargs: Any,
+    ) -> Generator[str, None, None]:
+        """流式 LLM 调用，逐块 yield 文本片段。"""
+        return stream_llm(
+            client=self._client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=self._config.active_llm_model(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=self._config.build_thinking_body(enable=enable_thinking),
+            reasoning_effort=self._config.build_reasoning_effort(enable=enable_thinking),
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=timeout,
             **kwargs,
         )
 
@@ -474,15 +459,58 @@ class LLMClient:
         user_prompt: str,
         json_schema: dict[str, Any],
         *,
+        schema_name: str = "output",
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
         enable_thinking: bool = False,
+        timeout: float | None = None,
+        response_transform: Callable[[Any], Any] | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any] | list | None:
-        """JSON Output 模式调用，返回解析后的 dict/list 或 None。"""
-        result = self.chat(
-            system_prompt, user_prompt,
-            json_schema=json_schema, enable_thinking=enable_thinking, **kwargs,
+    ) -> dict[str, Any] | list:
+        """JSON Output 模式调用，返回解析后的 dict/list。
+
+        重试耗尽后抛出 ``EmptyLLMResponseError`` 或 ``StructuredOutputError``，不再静默
+        返回 ``None``。
+        """
+        # thinking mode 下模型输出更长，自动增加 max_tokens 避免截断
+        if enable_thinking and max_tokens <= 4096:
+            max_tokens = 8192
+        return call_llm_json(
+            client=self._client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=self._config.active_llm_model(),
+            json_schema=json_schema,
+            schema_name=schema_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=self._config.build_thinking_body(enable=enable_thinking),
+            reasoning_effort=self._config.build_reasoning_effort(enable=enable_thinking),
+            max_retries=self._config.llm_max_retries,
+            retry_base_delay=self._config.llm_retry_base_delay,
+            timeout=timeout,
+            response_transform=response_transform,
+            **kwargs,
         )
-        return result  # type: ignore[return-value]
+
+    # ── Legacy 别名（向后兼容，待调用方迁移完成后删除） ──────────────
+
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        json_schema: dict[str, Any] | None = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> str | dict[str, Any] | list | Generator[str, None, None]:
+        """已废弃：统一入口。请改用 chat_text / chat_json / stream_text。"""
+        if json_schema is not None:
+            return self.chat_json(system_prompt, user_prompt, json_schema, **kwargs)
+        if stream:
+            return self.stream_text(system_prompt, user_prompt, **kwargs)
+        return self.chat_text(system_prompt, user_prompt, **kwargs)
+
 
 if TYPE_CHECKING:
     from config import Configuration

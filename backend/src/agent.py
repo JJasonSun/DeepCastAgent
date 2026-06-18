@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from openai import OpenAI
 
 from config import Configuration
-from errors import DeepCastError, ScriptError
+from errors import AudioSynthesisError, DeepCastError, ReportError, ScriptError
 from models import SummaryState, SummaryStateOutput, TodoItem
 from services.audio_generator import AudioGenerationService
 from services.audio_synthesizer import PodcastSynthesisService
@@ -61,10 +61,11 @@ class DeepResearchAgent:
         self._outline_action: str | None = None
         self._waiting_for_outline_confirmation = False
 
-        # 服务层（直接注入 OpenAI 客户端）
+        # 服务层（直接注入 OpenAI 客户端；reporter 需要 LLMClient 封装）
         self.planner = PlanningService(self.smart_client, self.config)
         self.summarizer = SummarizationService(self.fast_client, self.config)
-        self.reporting = ReportingService(self.smart_client, self.config)
+        from services.llm import LLMClient
+        self.reporting = ReportingService(LLMClient(self.smart_client, self.config), self.config)
         self.script_generator = ScriptGenerationService(self.config)
         self.audio_generator = AudioGenerationService(self.config)
         self.podcast_synthesizer = PodcastSynthesisService(self.config)
@@ -198,7 +199,10 @@ class DeepResearchAgent:
         audio_files = self.audio_generator.generate_audio(script, task_id)
 
         # 合成播客
-        self.podcast_synthesizer.synthesize_podcast(audio_files, task_id)
+        try:
+            self.podcast_synthesizer.synthesize_podcast(audio_files, task_id)
+        except AudioSynthesisError:
+            logger.error("播客合成失败，跳过")
 
         return SummaryStateOutput(
             running_summary=report,
@@ -227,8 +231,8 @@ class DeepResearchAgent:
         yield {"type": "status", "message": "初始化研究流程"}
 
         # 检索相关历史记忆
-        self._historical_context = self._retrieve_historical_context(topic)
-        if self._historical_context:
+        historical_context = self._retrieve_historical_context(topic)
+        if historical_context:
             yield {"type": "log", "message": "📚 [MEMORY] 已加载相关历史研究记忆"}
 
         if self.is_cancelled():
@@ -236,7 +240,7 @@ class DeepResearchAgent:
             return
 
         # Phase 1: 规划 + 并行研究
-        yield from self._stream_research_phase(state)
+        yield from self._stream_research_phase(state, historical_context=historical_context)
         if self.is_cancelled():
             yield {"type": "cancelled", "message": "研究任务已取消"}
             return
@@ -279,11 +283,12 @@ class DeepResearchAgent:
     # 流式阶段方法
     # ------------------------------------------------------------------
 
-    def _stream_research_phase(self, state: SummaryState) -> Iterator[dict[str, Any]]:
+    def _stream_research_phase(
+        self, state: SummaryState, *, historical_context: str = "",
+    ) -> Iterator[dict[str, Any]]:
         """Phase 1: 规划任务并行执行搜索 + 总结。"""
         if self.is_cancelled():
             return
-        historical_context = getattr(self, "_historical_context", "")
         plan_result = self.director.dispatch(
             "planner",
             {
@@ -319,7 +324,7 @@ class DeepResearchAgent:
 
         yield from self._run_parallel_tasks(
             state.todo_items, channel_map, state,
-            include_note_fields=True, error_label="Task",
+            error_label="Task",
         )
 
     def _run_parallel_tasks(
@@ -328,7 +333,6 @@ class DeepResearchAgent:
         channel_map: dict[int, dict[str, Any]],
         state: SummaryState,
         *,
-        include_note_fields: bool = True,
         error_label: str = "Task",
     ) -> Iterator[dict[str, Any]]:
         """并行执行任务列表，通过队列流式输出事件。
@@ -337,7 +341,6 @@ class DeepResearchAgent:
             tasks: 待执行的任务列表。
             channel_map: 任务 ID → {step, token} 映射。
             state: 共享的研究状态。
-            include_note_fields: 是否在 task_status 事件中包含 note_id/note_path。
             error_label: 日志中使用的任务阶段标签。
 
         Yields:
@@ -381,7 +384,7 @@ class DeepResearchAgent:
                     "intent": task.intent,
                     "query": task.query,
                 }
-                if include_note_fields:
+                if self.note_tool is not None:
                     in_progress_event["note_id"] = task.note_id
                     in_progress_event["note_path"] = task.note_path
                 enqueue(in_progress_event, task=task)
@@ -401,7 +404,7 @@ class DeepResearchAgent:
                     "intent": task.intent,
                     "query": task.query,
                 }
-                if include_note_fields:
+                if self.note_tool is not None:
                     failed_event["note_id"] = task.note_id
                     failed_event["note_path"] = task.note_path
                 enqueue(failed_event, task=task)
@@ -513,7 +516,7 @@ class DeepResearchAgent:
 
             yield {
                 "type": "log",
-                "message": f"正在生成报告大纲，等待用户确认（第 {attempt}/{max_attempts} 次）...",
+                "message": f"正在生成报告大纲（第 {attempt}/{max_attempts} 次），LLM 深度思考中，请稍候...",
             }
             outline = self.reporting.generate_report_outline(state)
             if not outline:
@@ -533,7 +536,6 @@ class DeepResearchAgent:
                 "max_attempts": max_attempts,
                 "message": "报告大纲已生成，请确认后继续制作，或重新生成大纲。",
             }
-            yield {"type": "log", "message": "报告大纲已生成，正在等待用户确认..."}
 
             action = self._wait_for_report_outline_action()
             with self._outline_action_lock:
@@ -544,13 +546,13 @@ class DeepResearchAgent:
             if self.is_cancelled():
                 return None
             if action == "approve":
-                yield {"type": "log", "message": "用户已确认报告大纲，继续撰写正式报告"}
+                yield {"type": "log", "message": "✅ 已确认报告大纲，继续撰写正式报告"}
                 return outline
             if action == "regenerate":
                 if attempt >= max_attempts:
-                    yield {"type": "log", "message": "报告大纲已达到重新生成次数上限，将使用当前大纲继续"}
+                    yield {"type": "log", "message": "已达到重新生成次数上限，使用当前大纲继续"}
                     return outline
-                yield {"type": "log", "message": "用户请求重新生成报告大纲"}
+                yield {"type": "log", "message": "🔄 用户请求重新生成报告大纲"}
                 attempt += 1
                 continue
 
@@ -641,7 +643,7 @@ class DeepResearchAgent:
                 state.todo_items.append(task)
             yield from self._run_parallel_tasks(
                 new_tasks, channel_map, state,
-                include_note_fields=False, error_label="Refine task",
+                error_label="Refine task",
             )
 
             # 智能终止：检查信息重复度
@@ -818,7 +820,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise DeepCastError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise ReportError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         if not current_report or self.config.max_report_refine_rounds <= 0:
             return current_report
 
@@ -874,7 +876,7 @@ class DeepResearchAgent:
         )
         current_report = report_result.data.get("report", "") if report_result.success else ""
         if is_report_generation_failure(current_report):
-            raise DeepCastError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
+            raise ReportError("报告生成失败：模型返回空报告或失败占位文本，已停止后续播客生成。")
         events.append({"type": "log", "message": f"报告初稿生成完成，共 {len(current_report)} 字符"})
 
         if not current_report or self.config.max_report_refine_rounds <= 0:
@@ -1051,14 +1053,18 @@ class DeepResearchAgent:
             return
 
         yield {"type": "log", "message": "使用 FFmpeg 拼接所有语音片段..."}
-        podcast_file = self.podcast_synthesizer.synthesize_podcast(
-            audio_files, task_id, cancel_check=self.is_cancelled,
-        )
+        try:
+            podcast_file = self.podcast_synthesizer.synthesize_podcast(
+                audio_files, task_id, cancel_check=self.is_cancelled,
+            )
+        except AudioSynthesisError as exc:
+            yield {"type": "error", "detail": str(exc)}
+            return
         if podcast_file:
             yield {"type": "podcast_ready", "file": podcast_file}
             yield {"type": "log", "message": f"播客文件生成成功: {podcast_file}"}
         else:
-            yield {"type": "log", "message": "播客合成失败，请检查 FFmpeg 配置"}
+            yield {"type": "log", "message": "播客合成已跳过（无有效音频片段或已取消）"}
 
     # ------------------------------------------------------------------
     # 执行助手
