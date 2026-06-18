@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import glob
 import json
 import os
 import shutil
@@ -16,8 +15,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-# Ensure src directory is in sys.path for module imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 将 src/ 加入 sys.path 以便同级模块导入（scripts/ 和 uvicorn 直接运行 main.py 时需要）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Load .env file from backend root
 from dotenv import load_dotenv
@@ -164,7 +163,7 @@ def _check_ffmpeg(config: Configuration) -> HealthCheckItem:
                 status="error",
                 message=f"未找到 FFmpeg 可执行文件：{configured_path}",
             )
-        if not os.access(path, os.X_OK):
+        if not os.access(path, os.X_OK):  # noqa: PTH101
             return HealthCheckItem(
                 id="ffmpeg",
                 label="FFmpeg",
@@ -288,8 +287,8 @@ def create_app() -> FastAPI:
     _active_agent: dict[str, DeepResearchAgent | None] = {"current": None}
 
     # 确保输出目录存在（使用绝对路径，基于 backend 根目录）
-    output_dir = os.path.join(str(_backend_root), "output")
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = _backend_root / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -342,21 +341,19 @@ def create_app() -> FastAPI:
     @app.get("/api/audio/latest")
     def get_latest_audio() -> dict[str, Any]:
         """获取最新生成的音频文件。"""
-        audio_dir = os.path.join(output_dir, "audio")
-        if not os.path.exists(audio_dir):
+        audio_dir = output_dir / "audio"
+        if not audio_dir.exists():
             return {"file": None, "error": "音频目录不存在"}
         
         # 查找所有 podcast_*.mp3 文件
-        pattern = os.path.join(audio_dir, "podcast_*.mp3")
-        files = glob.glob(pattern)
+        files = sorted(audio_dir.glob("podcast_*.mp3"), key=lambda p: p.stat().st_mtime)
         
         if not files:
             return {"file": None, "error": "没有找到音频文件"}
         
-        # 按修改时间排序，获取最新的
-        latest_file = max(files, key=os.path.getmtime)
-        filename = os.path.basename(latest_file)
-        return {"file": filename, "url": f"/output/audio/{filename}"}
+        # 获取最新的
+        latest_file = files[-1]
+        return {"file": latest_file.name, "url": f"/output/audio/{latest_file.name}"}
 
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest) -> ResearchResponse:

@@ -16,12 +16,9 @@ def get_config_value(value: Any) -> str:
 
 
 def strip_thinking_tokens(text: str) -> str:
-    """移除模型响应中的 ``<think>`` 部分。"""
-    while "<think>" in text and "</think>" in text:
-        start = text.find("<think>")
-        end = text.find("</think>") + len("</think>")
-        text = text[:start] + text[end:]
-    return text
+    """移除模型响应中的 ``<think>``...``</think>`` 部分。"""
+    from services.text_processing import strip_thinking_tokens as _impl  # noqa: I001
+    return _impl(text)
 
 
 def deduplicate_and_format_sources(

@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openai import (
     APIConnectionError,
@@ -369,3 +369,120 @@ def stream_llm(
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:
             yield delta.content
+
+
+class LLMClient:
+    """封装 OpenAI 客户端 + 配置，简化调用方签名。
+
+    用法::
+
+        client = LLMClient(openai_client, config)
+        text = client.chat("你是研究助手", "分析量子计算趋势")
+        data = client.chat_json("你是分析员", "输出 JSON", json_schema=schema)
+        for chunk in client.stream("你是播客主持", "生成脚本"):
+            ...
+
+    原始的 call_llm / call_llm_json / stream_llm 函数仍然保留，
+    供尚未迁移的调用方使用。
+    """
+
+    def __init__(self, client: OpenAI, config: Configuration) -> None:
+        self._client = client
+        self._config = config
+
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        json_schema: dict[str, Any] | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        enable_thinking: bool = False,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> str | dict[str, Any] | list | None | Generator[str, None, None]:
+        """统一的 LLM 调用入口。
+
+        Args:
+            system_prompt: 系统提示词。
+            user_prompt: 用户提示词。
+            json_schema: 提供时启用 JSON Output 模式，返回解析后的 dict/list。
+            temperature: 生成温度。
+            max_tokens: 最大输出 token 数。
+            enable_thinking: 是否启用 DeepSeek 思考模式。
+            stream: 是否流式返回（仅在 json_schema 为 None 时有效）。
+            **kwargs: 传递给底层函数的额外参数（tools, tool_choice 等）。
+
+        Returns:
+            - stream=True: Generator[str]
+            - json_schema 提供: dict | list | None
+            - 否则: str
+        """
+        extra_body = self._config.build_thinking_body(enable=enable_thinking)
+        reasoning_effort = self._config.build_reasoning_effort(enable=enable_thinking)
+        model = self._config.active_llm_model()
+        max_retries = self._config.llm_max_retries
+        retry_base_delay = self._config.llm_retry_base_delay
+
+        if json_schema is not None:
+            return call_llm_json(
+                client=self._client,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=model,
+                json_schema=json_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                reasoning_effort=reasoning_effort,
+                max_retries=max_retries,
+                retry_base_delay=retry_base_delay,
+                **kwargs,
+            )
+        if stream:
+            return stream_llm(
+                client=self._client,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                reasoning_effort=reasoning_effort,
+                max_retries=max_retries,
+                retry_base_delay=retry_base_delay,
+                **kwargs,
+            )
+        return call_llm(
+            client=self._client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            reasoning_effort=reasoning_effort,
+            max_retries=max_retries,
+            retry_base_delay=retry_base_delay,
+            **kwargs,
+        )
+
+    def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: dict[str, Any],
+        *,
+        enable_thinking: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any] | list | None:
+        """JSON Output 模式调用，返回解析后的 dict/list 或 None。"""
+        result = self.chat(
+            system_prompt, user_prompt,
+            json_schema=json_schema, enable_thinking=enable_thinking, **kwargs,
+        )
+        return result  # type: ignore[return-value]
+
+if TYPE_CHECKING:
+    from config import Configuration

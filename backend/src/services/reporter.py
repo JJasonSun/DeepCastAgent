@@ -15,8 +15,7 @@ from prompts import (
     report_writer_instructions,
 )
 from services.llm import call_llm, call_llm_json
-from services.text_processing import strip_tool_calls
-from utils import strip_thinking_tokens
+from services.text_processing import strip_thinking_tokens, strip_tool_calls
 
 logger = logging.getLogger(__name__)
 REPORT_GENERATION_FAILURE_MESSAGE = "报告生成失败，请检查输入。"

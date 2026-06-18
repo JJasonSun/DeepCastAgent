@@ -22,22 +22,37 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
 
-_tavily_client = None
-_search_lock = threading.Lock()
+class _TavilyClientFactory:
+    """延迟初始化 Tavily 客户端（线程安全，可重置）。"""
+
+    def __init__(self) -> None:
+        self._client = None
+        self._lock = threading.Lock()
+
+    def get(self, config: Configuration):
+        """返回已缓存的 TavilyClient，按需创建。"""
+        if self._client is None and config.tavily_api_key:
+            with self._lock:
+                if self._client is None:
+                    try:
+                        from tavily import TavilyClient
+                        self._client = TavilyClient(api_key=config.tavily_api_key)
+                    except ImportError:
+                        logger.warning("tavily-python 未安装，Tavily 搜索不可用")
+        return self._client
+
+    def reset(self) -> None:
+        """重置客户端（用于测试）。"""
+        with self._lock:
+            self._client = None
+
+
+_tavily_factory = _TavilyClientFactory()
 
 
 def _get_tavily_client(config: Configuration):
-    """延迟初始化 Tavily 客户端（线程安全）。"""
-    global _tavily_client
-    if _tavily_client is None and config.tavily_api_key:
-        with _search_lock:
-            if _tavily_client is None:
-                try:
-                    from tavily import TavilyClient
-                    _tavily_client = TavilyClient(api_key=config.tavily_api_key)
-                except ImportError:
-                    logger.warning("tavily-python 未安装，Tavily 搜索不可用")
-    return _tavily_client
+    """延迟初始化 Tavily 客户端（委托给工厂实例）。"""
+    return _tavily_factory.get(config)
 
 
 def _tavily_search(query: str, config: Configuration, max_results: int = 5) -> list[dict[str, Any]]:

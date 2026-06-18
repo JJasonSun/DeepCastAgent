@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Callable
+from collections.abc import Callable, Iterator
 
 from openai import OpenAI
 
@@ -12,8 +11,7 @@ from models import SummaryState, TodoItem
 from prompts import task_summarizer_system_prompt
 from services.llm import call_llm, stream_llm
 from services.notes import build_note_guidance
-from services.text_processing import strip_tool_calls
-from utils import strip_thinking_tokens
+from services.text_processing import strip_thinking_tokens, strip_tool_calls
 
 
 class SummarizationService:
