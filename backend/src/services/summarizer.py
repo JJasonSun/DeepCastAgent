@@ -7,9 +7,10 @@ from collections.abc import Callable, Iterator
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError
 from models import SummaryState, TodoItem
 from prompts import task_summarizer_system_prompt
-from services.llm import call_llm, stream_llm
+from services.llm import LLMClient
 from services.notes import build_note_guidance
 from services.text_processing import strip_thinking_tokens, strip_tool_calls
 
@@ -22,23 +23,20 @@ class SummarizationService:
         client: OpenAI,
         config: Configuration,
     ) -> None:
-        self._client = client
+        self._client = LLMClient(client, config)
         self._config = config
 
     def summarize_task(self, state: SummaryState, task: TodoItem, context: str) -> str:
         """使用 LLM 生成特定于任务的总结。"""
         prompt = self._build_prompt(state, task, context)
-        extra_body = self._config.build_thinking_body(enable=False)
 
-        response = call_llm(
-            client=self._client,
-            system_prompt=task_summarizer_system_prompt.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            extra_body=extra_body,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-        )
+        try:
+            response = self._client.chat_text(
+                task_summarizer_system_prompt.strip(),
+                prompt,
+            )
+        except DeepCastError:
+            return "暂无可用信息"
 
         summary_text = response.strip()
         if self._config.strip_thinking_tokens:
@@ -57,7 +55,6 @@ class SummarizationService:
         raw_buffer = ""
         visible_output = ""
         emit_index = 0
-        extra_body = self._config.build_thinking_body(enable=False)
 
         def flush_visible() -> Iterator[str]:
             """处理缓冲区，提取并 yield 所有不在 <think>...</think> 块中的可见文本。"""
@@ -85,14 +82,9 @@ class SummarizationService:
 
         def generator() -> Iterator[str]:
             nonlocal raw_buffer, visible_output, emit_index
-            for chunk in stream_llm(
-                client=self._client,
-                system_prompt=task_summarizer_system_prompt.strip(),
-                user_prompt=prompt,
-                model=self._config.active_llm_model(),
-                extra_body=extra_body,
-                max_retries=self._config.llm_max_retries,
-                retry_base_delay=self._config.llm_retry_base_delay,
+            for chunk in self._client.stream_text(
+                task_summarizer_system_prompt.strip(),
+                prompt,
             ):
                 raw_buffer += chunk
                 if remove_thinking:

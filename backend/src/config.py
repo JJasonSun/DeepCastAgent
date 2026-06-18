@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, field_validator
 # Define backend root directory
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
+# 默认 LLM 模型标识符，统一在一处定义，避免三处硬编码
+_DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+_PRO_LLM_MODEL = "deepseek-v4-pro"
+
 class SearchAPI(Enum):
     """搜索 API 提供商的枚举。
 
@@ -67,7 +71,7 @@ class Configuration(BaseModel):
         description="使用自定义 OpenAI 兼容服务时的可选基础 URL",
     )
     llm_model_id: str | None = Field(
-        default="deepseek-v4-flash",
+        default=_DEFAULT_LLM_MODEL,
         title="LLM 模型 ID",
         description="当前任务使用的 DeepSeek 模型 ID",
     )
@@ -363,7 +367,7 @@ class Configuration(BaseModel):
         return {
             "production_mode": search_depth,
             "search_depth": search_depth,
-            "llm_model_id": "deepseek-v4-flash" if search_depth == "quick" else "deepseek-v4-pro",
+            "llm_model_id": _DEFAULT_LLM_MODEL if search_depth == "quick" else _PRO_LLM_MODEL,
             "llm_reasoning_effort": "high" if search_depth == "quick" else "max",
             "max_research_refine_rounds": 0 if search_depth == "quick" else 2,
             "max_report_refine_rounds": 0 if search_depth == "quick" else 1,
@@ -425,4 +429,4 @@ class Configuration(BaseModel):
 
     def active_llm_model(self) -> str:
         """返回当前任务实际使用的 LLM 模型。"""
-        return self.llm_model_id or "deepseek-v4-flash"
+        return self.llm_model_id or _DEFAULT_LLM_MODEL

@@ -8,9 +8,10 @@ import logging
 from openai import OpenAI
 
 from config import Configuration
+from errors import DeepCastError
 from models import SummaryState
 from prompts import script_blueprint_instructions, script_writer_instructions
-from services.llm import call_llm_json
+from services.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 MAX_BLUEPRINT_SECTIONS = 3
@@ -151,13 +152,13 @@ class ScriptGenerationService:
         self._config = config
         # 优先使用注入的自定义客户端，以保持向后兼容和可测试性；
         # 如果未提供，则基于配置创建默认的 OpenAI 客户端以支持结构化输出。
-        self._client = script_agent or OpenAI(
+        openai_client = script_agent or OpenAI(
             api_key=config.llm_api_key,
             base_url=config.llm_base_url,
             timeout=config.llm_timeout,
             max_retries=0,
         )
-        self._model = config.active_llm_model()
+        self._client = LLMClient(openai_client, config)
 
     def generate_blueprint(self, state: SummaryState) -> dict | None:
         """基于研究报告生成可展示的节目蓝图。"""
@@ -211,25 +212,16 @@ class ScriptGenerationService:
             f"<RESEARCH_REPORT>\n{state.structured_report}\n</RESEARCH_REPORT>"
         )
         try:
-            result = call_llm_json(
-                client=self._client,
-                system_prompt=script_writer_instructions.strip(),
-                user_prompt=user_prompt,
-                model=self._model,
-                json_schema=SCRIPT_JSON_SCHEMA,
+            result = self._client.chat_json(
+                script_writer_instructions.strip(),
+                user_prompt,
+                SCRIPT_JSON_SCHEMA,
                 schema_name="podcast_script",
                 temperature=0.7,
                 max_tokens=4096,
-                extra_body=self._config.build_thinking_body(enable=False),
-                max_retries=self._config.llm_max_retries,
-                retry_base_delay=self._config.llm_retry_base_delay,
                 timeout=self._config.llm_long_timeout,
                 response_transform=self._normalize_blueprint,
             )
-
-            if not result:
-                logger.error("Empty response from LLM")
-                return []
 
             script = self._extract_turns(result)
             if script is None:
@@ -260,8 +252,8 @@ class ScriptGenerationService:
 
             logger.info("Generated script with %d dialogue turns.", len(valid_script))
             return valid_script
-        except json.JSONDecodeError as e:
-            logger.error("JSON decode error (should not happen with structured output): %s", e)
+        except DeepCastError as e:
+            logger.error("Script generation failed: %s", e)
             return []
         except Exception as e:
             logger.error("Script generation failed: %s", e)
@@ -303,19 +295,15 @@ class ScriptGenerationService:
             return None
 
         try:
-            result = call_llm_json(
-                client=self._client,
-                system_prompt=script_blueprint_instructions.strip(),
-                user_prompt=f"<RESEARCH_REPORT>\n{report}\n</RESEARCH_REPORT>",
-                model=self._model,
-                json_schema=SCRIPT_BLUEPRINT_JSON_SCHEMA,
+            result = self._client.chat_json(
+                script_blueprint_instructions.strip(),
+                f"<RESEARCH_REPORT>\n{report}\n</RESEARCH_REPORT>",
+                SCRIPT_BLUEPRINT_JSON_SCHEMA,
                 schema_name="podcast_blueprint",
                 temperature=0.4,
                 max_tokens=2048,
-                extra_body=self._config.build_thinking_body(enable=False),
-                max_retries=self._config.llm_max_retries,
-                retry_base_delay=self._config.llm_retry_base_delay,
                 timeout=self._config.llm_long_timeout,
+                response_transform=self._normalize_blueprint,
             )
             if isinstance(result, dict):
                 logger.info(
@@ -323,7 +311,7 @@ class ScriptGenerationService:
                     result.get("title", "untitled"),
                 )
                 return result
-        except Exception as e:
+        except DeepCastError as e:
             logger.warning("Podcast blueprint generation failed; falling back to direct script generation: %s", e)
         return None
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from pydub import AudioSegment
 
 from config import Configuration
+from errors import AudioSynthesisError
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,11 @@ class PodcastSynthesisService:
             
             return str(output_path)
 
+        except AudioSynthesisError:
+            raise
         except Exception as e:
             logger.exception("Podcast synthesis failed: %s", e)
-            return None
+            raise AudioSynthesisError(f"播客合成失败: {e}") from e
 
     def _apply_intro_bgm(self, audio: AudioSegment) -> AudioSegment:
         """在播客开头添加短 BGM，淡出后再进入人声。"""

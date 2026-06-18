@@ -61,6 +61,12 @@ class AudioGenerationService:
         self._output_dir = Path(config.audio_output_dir)
         self._ensure_output_dir()
         self._use_voice_design = bool(config.enable_tts_voice_design and config.tts_voice_design_model)
+        # 缓存 TTS 客户端，避免每次调用都创建新实例
+        self._tts_client = OpenAI(
+            api_key=config.tts_api_key,
+            base_url=config.tts_base_url,
+            max_retries=0,
+        )
 
     def _ensure_output_dir(self) -> None:
         if not self._output_dir.exists():
@@ -281,11 +287,7 @@ class AudioGenerationService:
             return True
 
         try:
-            client = OpenAI(
-                api_key=self._config.tts_api_key,
-                base_url=self._config.tts_base_url,
-                max_retries=0,
-            )
+            client = self._tts_client
 
             # 构建导演模式 style 指令
             style_instruction = self._build_director_instruction(role, emotion, audio_tag, conversation_context)

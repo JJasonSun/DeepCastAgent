@@ -9,9 +9,9 @@ from typing import Any
 from openai import OpenAI
 
 from config import Configuration
-from errors import SearchError
+from errors import DeepCastError, SearchError
 from prompts import search_result_filter_instructions
-from services.llm import call_llm_json, run_with_retry
+from services.llm import LLMClient, run_with_retry
 from utils import (
     deduplicate_and_format_sources,
     format_sources,
@@ -253,22 +253,22 @@ def filter_search_results(
         research_topic=research_topic,
         search_results="\n\n".join(results_text),
     )
-    extra_body = config.build_thinking_body(enable=False)
 
-    filter_result = call_llm_json(
-        client=client,
-        system_prompt="你是一名信息筛选专家。",
-        user_prompt=prompt,
-        model=config.active_llm_model(),
-        json_schema=FILTER_JSON_SCHEMA,
-        schema_name="search_filter",
-        extra_body=extra_body,
-        max_retries=config.llm_max_retries,
-        retry_base_delay=config.llm_retry_base_delay,
-    )
+    llm_client = LLMClient(client, config)
 
-    if not filter_result or not isinstance(filter_result, dict):
-        logger.warning("Search filter returned no result, keeping all results")
+    try:
+        filter_result = llm_client.chat_json(
+            "你是一名信息筛选专家。",
+            prompt,
+            FILTER_JSON_SCHEMA,
+            schema_name="search_filter",
+        )
+    except DeepCastError as exc:
+        logger.warning("Search filter failed; keeping all results: %s", exc)
+        return results
+
+    if not isinstance(filter_result, dict):
+        logger.warning("Search filter returned non-dict result, keeping all results")
         return results
 
     # 根据评估结果过滤

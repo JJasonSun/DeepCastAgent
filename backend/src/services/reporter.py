@@ -5,16 +5,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from openai import OpenAI
-
 from config import Configuration
+from errors import DeepCastError
 from models import SummaryState
 from prompts import (
     report_critic_instructions,
     report_outline_instructions,
     report_writer_instructions,
 )
-from services.llm import call_llm, call_llm_json
+from services.llm import LLMClient
 from services.text_processing import strip_thinking_tokens, strip_tool_calls
 
 logger = logging.getLogger(__name__)
@@ -154,7 +153,7 @@ CRITIC_JSON_SCHEMA: dict[str, Any] = {
 class ReportingService:
     """生成最终的结构化报告。"""
 
-    def __init__(self, client: OpenAI, config: Configuration) -> None:
+    def __init__(self, client: LLMClient, config: Configuration) -> None:
         self._client = client
         self._config = config
 
@@ -187,18 +186,11 @@ class ReportingService:
             "请整合所有任务的研究发现，撰写一份结构化的深度研究报告。"
             "报告必须围绕核心问题展开，保留证据线索，避免无来源的强结论。"
         )
-        extra_body = self._config.build_thinking_body(enable=True)
-        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
-        response = call_llm(
-            client=self._client,
-            system_prompt=report_writer_instructions.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
+        response = self._client.chat_text(
+            report_writer_instructions.strip(),
+            prompt,
+            enable_thinking=True,
             timeout=self._config.llm_long_timeout,
         )
 
@@ -320,22 +312,19 @@ class ReportingService:
             f"研究主题：{state.research_topic}\n\n"
             f"<TASK_CONTEXT>\n{tasks_context}\n</TASK_CONTEXT>"
         )
-        extra_body = self._config.build_thinking_body(enable=True)
-        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
-        result = call_llm_json(
-            client=self._client,
-            system_prompt=report_outline_instructions.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            json_schema=REPORT_OUTLINE_JSON_SCHEMA,
-            schema_name="report_outline",
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-            timeout=self._config.llm_long_timeout,
-        )
+        try:
+            result = self._client.chat_json(
+                report_outline_instructions.strip(),
+                prompt,
+                REPORT_OUTLINE_JSON_SCHEMA,
+                schema_name="report_outline",
+                enable_thinking=True,
+                timeout=self._config.llm_long_timeout,
+            )
+        except DeepCastError as exc:
+            logger.warning("Report outline generation failed; falling back to direct report generation: %s", exc)
+            return None
 
         if isinstance(result, dict):
             logger.info("Generated report outline: %s", result.get("title", "untitled"))
@@ -491,22 +480,19 @@ class ReportingService:
             f"请评估以下研究报告的质量：\n\n"
             f"{'=' * 40}\n{report}\n{'=' * 40}"
         )
-        extra_body = self._config.build_thinking_body(enable=True)
-        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
-        result = call_llm_json(
-            client=self._client,
-            system_prompt=report_critic_instructions.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            json_schema=CRITIC_JSON_SCHEMA,
-            schema_name="report_critique",
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-            timeout=self._config.llm_long_timeout,
-        )
+        try:
+            result = self._client.chat_json(
+                report_critic_instructions.strip(),
+                prompt,
+                CRITIC_JSON_SCHEMA,
+                schema_name="report_critique",
+                enable_thinking=True,
+                timeout=self._config.llm_long_timeout,
+            )
+        except DeepCastError as exc:
+            logger.warning("Report critique failed: %s", exc)
+            return None
 
         if isinstance(result, dict):
             return result
@@ -542,20 +528,17 @@ class ReportingService:
             f"{report}\n\n"
             "请输出修改后的完整报告（Markdown 格式），不要输出其他内容。"
         )
-        extra_body = self._config.build_thinking_body(enable=True)
-        reasoning_effort = self._config.build_reasoning_effort(enable=True)
 
-        response = call_llm(
-            client=self._client,
-            system_prompt=report_writer_instructions.strip(),
-            user_prompt=prompt,
-            model=self._config.active_llm_model(),
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-            max_retries=self._config.llm_max_retries,
-            retry_base_delay=self._config.llm_retry_base_delay,
-            timeout=self._config.llm_long_timeout,
-        )
+        try:
+            response = self._client.chat_text(
+                report_writer_instructions.strip(),
+                prompt,
+                enable_thinking=True,
+                timeout=self._config.llm_long_timeout,
+            )
+        except DeepCastError as exc:
+            logger.warning("Report refinement failed; keeping previous version: %s", exc)
+            return report
 
         refined_text = response.strip()
         if self._config.strip_thinking_tokens:

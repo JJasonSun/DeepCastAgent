@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from agent import DeepResearchAgent
 from config import Configuration
+from errors import DeepCastError
 
 # 添加控制台日志处理程序
 logger.add(
@@ -457,11 +458,17 @@ def create_app() -> FastAPI:
                             logger.info("Generator stopped: cancel detected")
                             break
                         loop.call_soon_threadsafe(event_queue.put_nowait, event)
-                except Exception as exc:
-                    logger.exception("Generator raised exception")
+                except DeepCastError as exc:
+                    logger.warning("Business error in generator: %s", exc)
                     loop.call_soon_threadsafe(
                         event_queue.put_nowait,
-                        {"type": "error", "detail": f"{exc.__class__.__name__}: {exc}"},
+                        {"type": "error", "detail": str(exc)},
+                    )
+                except Exception:
+                    logger.exception("Unexpected error in generator")
+                    loop.call_soon_threadsafe(
+                        event_queue.put_nowait,
+                        {"type": "error", "detail": "内部错误，请稍后重试"},
                     )
                 finally:
                     loop.call_soon_threadsafe(event_queue.put_nowait, _SENTINEL)
