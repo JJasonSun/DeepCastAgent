@@ -162,7 +162,9 @@ DeepCast 的核心洞察：**用对话式播客替代文字阅读，让耳朵成
   → DirectorAgent.dispatch("planner") → TodoItem[] 任务列表
   → [并行] DirectorAgent.dispatch("researcher") → 混合搜索 + 过滤 + 权威性排序 + 摘要
   → DirectorAgent.dispatch("planner", analyze/gain) → 递归反思覆盖/缺口/来源策略 → 补充搜索（迭代至饱和 + 智能终止）
-  → DirectorAgent.dispatch("writer") → 报告大纲 + 初稿
+  → DirectorAgent.dispatch("writer") → 报告大纲
+  → [大纲确认]（deep 模式）推送大纲给前端 → POST /research/outline/continue 确认后继续
+  → DirectorAgent.dispatch("writer") → 报告初稿
   → DirectorAgent.dispatch("critic") → 报告质量评估
   → DirectorAgent.dispatch("writer", revise) → 结构化 Markdown 报告
   → DirectorAgent.dispatch("writer", blueprint/script) → 节目蓝图 JSON → 双人对话 JSON 脚本（含 emotion + audio_tag）
@@ -205,6 +207,20 @@ npm run dev                       # 访问 http://localhost:5174
 
 启动后端后，可访问 `GET /api/health` 查看本地前置健康检查。该接口只检查本地运行必需项，包括 LLM/TTS/Search API Key 是否配置、FFmpeg 是否可用、音频输出目录是否可写；前端会据此判断是否允许开始生成，避免任务启动后才暴露缺配置问题。
 
+**主要接口：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/healthz` | 存活探针（轻量，无外部依赖） |
+| GET | `/api/health` | 前置健康检查（API Key / FFmpeg / 输出目录） |
+| GET | `/api/audio/latest` | 获取最近一次生成的音频 |
+| POST | `/research` | 非流式研究接口（同步返回） |
+| POST | `/research/stream` | 主链路：SSE 流式播客生成（事件含任务、搜索、报告、节目蓝图、脚本、音频进度） |
+| POST | `/research/outline/continue` | 大纲确认流程：报告大纲生成后暂停，前端确认后调用此接口继续 |
+| POST | `/research/cancel` | 取消正在进行的生成任务 |
+
+> 大纲确认：deep 模式下报告大纲生成后会先推送给前端，等待用户确认（可调整）后再继续撰写正文，避免长报告方向跑偏浪费成本。该能力由 `require_report_outline_confirmation` 控制，quick 模式默认跳过。
+
 **关键环境变量：**
 - `LLM_API_KEY` / `LLM_BASE_URL`：大语言模型 API
 - `TTS_API_KEY` / `TTS_BASE_URL`：语音合成 API
@@ -230,7 +246,11 @@ cd backend
 uv run python scripts/verify_llm_empty_retry.py       # 验证 LLM 空 content 重试
 uv run python scripts/verify_intro_bgm.py             # 验证片头 BGM 拼接
 uv run python scripts/verify_script_json_schema.py    # 验证播客脚本 JSON 结构
+uv run python scripts/verify_script_failure_guard.py  # 验证脚本 JSON 失败时转 SSE error 而非误判完成
 uv run python scripts/verify_report_failure_guard.py  # 验证报告失败不进入音频链路
+uv run python scripts/verify_report_preamble_cleanup.py # 验证报告多余开场说明被清理
+uv run python scripts/verify_production_modes.py      # 验证 quick/deep 生产模式预设
+uv run python scripts/verify_style_and_tts_controls.py  # 验证播客风格与 TTS 声音一致性控制
 ```
 
 ## 开源记录
@@ -252,6 +272,7 @@ backend/
   src/
     agent.py               # DeepResearchAgent 核心编排器（集成 Director）
     config.py              # 配置中心（环境变量加载）
+    errors.py              # 统一异常层级（DeepCastError 及各业务异常）
     models.py              # 数据模型（TodoItem, SummaryState）
     prompts.py             # Agent 系统提示词模板
     utils.py               # 工具函数（格式化、去重）
@@ -271,6 +292,10 @@ backend/
       audio_generator.py   # TTS 语音合成（导演模式 + VoiceDesign）
       audio_synthesizer.py # 音频拼接
       memory_manager.py    # 可选历史研究记忆（默认关闭，用于专题系列复用）
+      text_processing.py   # 生成文本标准化（剥离工具调用标记等）
+      tool_events.py       # 工具调用事件收集与暴露
+      notes.py             # 笔记工具使用说明协调
+      note_manager.py      # 结构化笔记管理器
       llm.py               # LLM 调用封装（JSON 结构化输出）
   scripts/                 # 验证 & 测试脚本
 frontend/

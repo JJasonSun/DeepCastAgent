@@ -48,10 +48,11 @@ Frontend: `VITE_API_BASE_URL` in `frontend/.env.local` (default `http://localhos
 Pipeline: Topic → PlannerAgent (TodoItem tasks) → ResearcherAgent (parallel hybrid search + summarization, iterative refinement) → WriterAgent (report outline + draft) → CriticAgent (quality eval) → WriterAgent (revision) → WriterAgent (podcast blueprint + dual-host dialogue JSON) → AudioGenerator (MiMo TTS per-sentence) → AudioSynthesizer (FFmpeg concat) → `podcast_*.mp3`.
 
 Key entry points:
-- `backend/src/main.py` — FastAPI app. Primary endpoint: `POST /research/stream` (SSE). Health: `GET /api/health`.
+- `backend/src/main.py` — FastAPI app. Routes: `GET /healthz` (liveness), `GET /api/health` (preflight checks), `GET /api/audio/latest`, `POST /research` (sync), `POST /research/stream` (SSE, primary), `POST /research/outline/continue` (resume after outline confirmation), `POST /research/cancel`.
 - `backend/src/agent.py` — `DeepResearchAgent` orchestrator. Bridges sync generators to async SSE via `asyncio.Queue` + `ThreadPoolExecutor`.
 - `backend/src/agents/director.py` — `DirectorAgent` registry + dispatch for all agents.
-- `backend/src/config.py` — `Configuration` (Pydantic). Loads from env vars (field name uppercased). Two presets: `quick` (deepseek-v4-flash, no refinement) and `deep` (deepseek-v4-pro, max reasoning, full pipeline).
+- `backend/src/config.py` — `Configuration` (Pydantic). Loads from env vars (field name uppercased). Two presets via `apply_production_preset()`: `quick` (deepseek-v4-flash, `high` reasoning, no refine, no outline confirmation) and `deep` (deepseek-v4-pro, `max` reasoning, full pipeline + `require_report_outline_confirmation=True`). Mode selection uses two independent fields: `production_mode` (quick/deep, controls audio/script depth) and `search_depth` (quick/deep, controls research depth); `apply_production_preset()` syncs both from `search_depth`.
+- `backend/src/errors.py` — Unified exception hierarchy (`DeepCastError` base + `SearchError`/`ReportError`/`ScriptError`/`TTSError`/`AudioSynthesisError`). Raise these domain errors instead of generic `Exception`.
 - `backend/src/prompts.py` — All system prompt templates (Chinese).
 
 Frontend: Vue 3 Composition API (`<script setup>`) + TypeScript + Tailwind CSS 4 + DaisyUI 5. SSE via native `fetch` + `ReadableStream` (no Axios) in `src/services/api.ts`. `App.vue` owns all state; child views: `SetupView`, `ProductionView`, `PlayerView`.
